@@ -27,7 +27,7 @@ https://github.com/enricoros/big-AGI/assets/32999/95ceb03c-945d-4fdd-9a9f-3317be
 
 - **Voice Calls**: real-time voice call your personas out of the blue or in relation to a chat [#354](https://github.com/enricoros/big-AGI/issues/354)
 - Support **OpenAI 0125** Models. [#364](https://github.com/enricoros/big-AGI/issues/364)
-- Rename or Auto-Rename chats.  [#222](https://github.com/enricoros/big-AGI/issues/222), [#360](https://github.com/enricoros/big-AGI/issues/360)
+- Rename or Auto-Rename chats. [#222](https://github.com/enricoros/big-AGI/issues/222), [#360](https://github.com/enricoros/big-AGI/issues/360)
 - More control over **Link Sharing** [#356](https://github.com/enricoros/big-AGI/issues/356)
 - **Accessibility** to screen readers [#358](https://github.com/enricoros/big-AGI/issues/358)
 - Export chats to Markdown [#337](https://github.com/enricoros/big-AGI/issues/337)
@@ -72,13 +72,14 @@ For full details and former releases, check out the [changelog](docs/changelog.m
 
 ## 💖 Support
 
-[//]: # ([![Official Discord]&#40;https://img.shields.io/discord/1098796266906980422?label=discord&logo=discord&logoColor=%23fff&style=for-the-badge&#41;]&#40;https://discord.gg/MkH4qj2Jp9&#41;)
+[//]: # '[![Official Discord](https://img.shields.io/discord/1098796266906980422?label=discord&logo=discord&logoColor=%23fff&style=for-the-badge)](https://discord.gg/MkH4qj2Jp9)'
+
 [![Official Discord](https://discordapp.com/api/guilds/1098796266906980422/widget.png?style=banner2)](https://discord.gg/MkH4qj2Jp9)
 
-* Enjoy the hosted open-source app on [big-AGI.com](https://big-agi.com)
-* [Chat with us](https://discord.gg/MkH4qj2Jp9)
-* Deploy your [fork](https://github.com/enricoros/big-agi/fork) for your friends and family
-* send PRs! ...
+- Enjoy the hosted open-source app on [big-AGI.com](https://big-agi.com)
+- [Chat with us](https://discord.gg/MkH4qj2Jp9)
+- Deploy your [fork](https://github.com/enricoros/big-agi/fork) for your friends and family
+- send PRs! ...
   🎭[Editing Personas](https://github.com/enricoros/big-agi/issues/35),
   🧩[Reasoning Systems](https://github.com/enricoros/big-agi/issues/36),
   🌐[Community Templates](https://github.com/enricoros/big-agi/issues/35),
@@ -129,7 +130,7 @@ Build and run:
 ```bash
 docker build -t big-agi .
 docker run -d -p 3000:3000 big-agi
-``` 
+```
 
 Or run the official container:
 
@@ -148,11 +149,11 @@ Create your GitHub fork, create a Vercel project over that fork, and deploy it. 
 
 ## Integrations:
 
-* Local models: Ollama, Oobabooga, LocalAi, etc.
-* [ElevenLabs](https://elevenlabs.io/) Voice Synthesis (bring your own voice too) - Settings > Text To Speech
-* [Helicone](https://www.helicone.ai/) LLM Observability Platform - Models > OpenAI > Advanced > API Host: 'oai.hconeai.com'
-* [Paste.gg](https://paste.gg/) Paste Sharing - Chat Menu > Share via paste.gg
-* [Prodia](https://prodia.com/) Image Generation - Settings > Image Generation > Api Key & Model
+- Local models: Ollama, Oobabooga, LocalAi, etc.
+- [ElevenLabs](https://elevenlabs.io/) Voice Synthesis (bring your own voice too) - Settings > Text To Speech
+- [Helicone](https://www.helicone.ai/) LLM Observability Platform - Models > OpenAI > Advanced > API Host: 'oai.hconeai.com'
+- [Paste.gg](https://paste.gg/) Paste Sharing - Chat Menu > Share via paste.gg
+- [Prodia](https://prodia.com/) Image Generation - Settings > Image Generation > Api Key & Model
 
 <br/>
 
@@ -163,6 +164,6 @@ This project is licensed under the MIT License.
 [![GitHub pull requests](https://img.shields.io/github/issues-pr/enricoros/big-agi)](https://github.com/enricoros/big-agi/pulls)
 [![License](https://img.shields.io/github/license/enricoros/big-agi)](https://github.com/enricoros/big-agi/LICENSE)
 
-[//]: # ([![GitHub issues]&#40;https://img.shields.io/github/issues/enricoros/big-agi&#41;]&#40;https://github.com/enricoros/big-agi/issues&#41;)
+[//]: # '[![GitHub issues](https://img.shields.io/github/issues/enricoros/big-agi)](https://github.com/enricoros/big-agi/issues)'
 
 Made with 💙

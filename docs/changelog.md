@@ -16,7 +16,7 @@ https://github.com/enricoros/big-AGI/assets/32999/95ceb03c-945d-4fdd-9a9f-3317be
 
 - **Voice Calls**: real-time voice call your personas out of the blue or in relation to a chat [#354](https://github.com/enricoros/big-AGI/issues/354)
 - Support **OpenAI 0125** Models. [#364](https://github.com/enricoros/big-AGI/issues/364)
-- Rename or Auto-Rename chats.  [#222](https://github.com/enricoros/big-AGI/issues/222), [#360](https://github.com/enricoros/big-AGI/issues/360)
+- Rename or Auto-Rename chats. [#222](https://github.com/enricoros/big-AGI/issues/222), [#360](https://github.com/enricoros/big-AGI/issues/360)
 - More control over **Link Sharing** [#356](https://github.com/enricoros/big-AGI/issues/356)
 - **Accessibility** to screen readers [#358](https://github.com/enricoros/big-AGI/issues/358)
 - Export chats to Markdown [#337](https://github.com/enricoros/big-AGI/issues/337)
@@ -100,7 +100,7 @@ https://github.com/enricoros/big-AGI/assets/1590910/a6b8e172-0726-4b03-a5e5-10cf
 
 For Developers:
 
-- Runtime Server-Side configuration:  https://github.com/enricoros/big-agi/issues/189. Env vars are
+- Runtime Server-Side configuration: https://github.com/enricoros/big-agi/issues/189. Env vars are
   not required to be set at build time anymore. The frontend will roundtrip to the backend at the
   first request to get the configuration. See
   https://github.com/enricoros/big-agi/blob/main/src/modules/backend/backend.router.ts.
@@ -169,7 +169,7 @@ For Developers:
 - **Context** - Attach or [Drag & Drop files](../docs/pixels/feature_drop_target.png) to add them to the prompt 📁
 - **Syntax highlighting** - for multiple languages 🌈
 - **Code Execution: Sandpack** -
-  [now on branch]((https://github.com/enricoros/big-agi/commit/f678a0d463d5e9cf0733f577e11bd612b7902d89)) `variant-code-execution`
+  [now on branch](<(https://github.com/enricoros/big-agi/commit/f678a0d463d5e9cf0733f577e11bd612b7902d89)>) `variant-code-execution`
 - Chat with GPT-4 and 3.5 Turbo 🧠💨
 - Real-time streaming of AI responses ⚡
 - **Voice Input** 🎙️ - works great on Chrome / Windows
