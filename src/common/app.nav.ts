@@ -53,13 +53,14 @@ export interface NavItemApp extends ItemBase {
   route: string,
   landingRoute?: string,  // specify a different route than the nextjs page router route, to land to
   barTitle?: string,      // set to override the name as the bar title (unless custom bar content is used)
+  drawer?: boolean,       // set to true to show in the drawer
   hideOnMobile?: boolean, // set to true to hide the icon on mobile, unless this is the active app
   hideIcon?: boolean
-    | (() => boolean),    // set to true to hide the icon, unless this is the active app
+  | (() => boolean),    // set to true to hide the icon, unless this is the active app
   hideBar?: boolean,      // set to true to hide the page bar
   hideDrawer?: boolean,   // set to true to hide the drawer
   hideNav?: boolean
-    | (() => boolean),    // set to hide the Nav bar (note: must have a way to navigate back)
+  | (() => boolean),    // set to hide the Nav bar (note: must have a way to navigate back)
   fullWidth?: boolean,    // set to true to override the user preference
   _delete?: boolean,      // delete from the UI
 }
