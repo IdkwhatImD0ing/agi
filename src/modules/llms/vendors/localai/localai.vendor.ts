@@ -1,4 +1,4 @@
-import DevicesIcon from '@mui/icons-material/Devices';
+import { LocalAIIcon } from '~/common/components/icons/vendors/LocalAIIcon';
 
 import type { IModelVendor } from '../IModelVendor';
 import type { OpenAIAccessSchema } from '../../server/openai/openai.router';
@@ -18,10 +18,10 @@ export const ModelVendorLocalAI: IModelVendor<SourceSetupLocalAI, OpenAIAccessSc
   name: 'LocalAI',
   rank: 22,
   location: 'local',
-  instanceLimit: 1,
+  instanceLimit: 4,
 
   // components
-  Icon: DevicesIcon,
+  Icon: LocalAIIcon,
   SourceSetupComponent: LocalAISourceSetup,
   LLMOptionsComponent: OpenAILLMOptions,
 

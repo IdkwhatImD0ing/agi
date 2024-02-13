@@ -12,7 +12,7 @@ import { ShortcutKeyName, useGlobalShortcut } from '~/common/components/useGloba
 import { createDMessage, DConversationId, DMessage, getConversation, useChatStore } from '~/common/state/store-chats';
 import { useCapabilityElevenLabs } from '~/common/components/useCapabilities';
 
-import { ChatMessageMemo } from './message/ChatMessage';
+import { ChatMessage, ChatMessageMemo } from './message/ChatMessage';
 import { CleanerMessage, MessagesSelectionHeader } from './message/CleanerMessage';
 import { PersonaSelector } from './persona-selector/PersonaSelector';
 import { useChatShowSystemMessages } from '../store-app-chat';
@@ -26,12 +26,14 @@ export function ChatMessageList(props: {
   conversationId: DConversationId | null,
   capabilityHasT2I: boolean,
   chatLLMContextTokens: number | null,
-  isMessageSelectionMode: boolean, setIsMessageSelectionMode: (isMessageSelectionMode: boolean) => void,
+  isMessageSelectionMode: boolean,
+  isMobile: boolean,
   onConversationBranch: (conversationId: DConversationId, messageId: string) => void,
-  onConversationExecuteHistory: (conversationId: DConversationId, history: DMessage[]) => Promise<void>,
+  onConversationExecuteHistory: (conversationId: DConversationId, history: DMessage[], chatEffectBestOf: boolean) => Promise<void>,
   onTextDiagram: (diagramConfig: DiagramConfig | null) => void,
   onTextImagine: (conversationId: DConversationId, selectedText: string) => Promise<void>,
   onTextSpeak: (selectedText: string) => Promise<void>,
+  setIsMessageSelectionMode: (isMessageSelectionMode: boolean) => void,
   sx?: SxProps,
 }) {
 
@@ -63,7 +65,7 @@ export function ChatMessageList(props: {
   // text actions
 
   const handleRunExample = React.useCallback(async (text: string) => {
-    conversationId && await onConversationExecuteHistory(conversationId, [...conversationMessages, createDMessage('user', text)]);
+    conversationId && await onConversationExecuteHistory(conversationId, [...conversationMessages, createDMessage('user', text)], false);
   }, [conversationId, conversationMessages, onConversationExecuteHistory]);
 
 
@@ -73,11 +75,11 @@ export function ChatMessageList(props: {
     conversationId && onConversationBranch(conversationId, messageId);
   }, [conversationId, onConversationBranch]);
 
-  const handleConversationRestartFrom = React.useCallback(async (messageId: string, offset: number) => {
+  const handleConversationRestartFrom = React.useCallback(async (messageId: string, offset: number, chatEffectBestOf: boolean) => {
     const messages = getConversation(conversationId)?.messages;
     if (messages) {
       const truncatedHistory = messages.slice(0, messages.findIndex(m => m.id === messageId) + offset + 1);
-      conversationId && await onConversationExecuteHistory(conversationId, truncatedHistory);
+      conversationId && await onConversationExecuteHistory(conversationId, truncatedHistory, chatEffectBestOf);
     }
   }, [conversationId, onConversationExecuteHistory]);
 
@@ -148,17 +150,17 @@ export function ChatMessageList(props: {
   });
 
 
-  // text-diff functionality, find the messages to diff with
+  // text-diff functionality: only diff the last message and when it's complete (not typing), and they're similar in size
 
-  const { diffMessage, diffText } = React.useMemo(() => {
+  const { diffTargetMessage, diffPrevText } = React.useMemo(() => {
     const [msgB, msgA] = conversationMessages.filter(m => m.role === 'assistant').reverse();
     if (msgB?.text && msgA?.text && !msgB?.typing) {
       const textA = msgA.text, textB = msgB.text;
       const lenA = textA.length, lenB = textB.length;
       if (lenA > 80 && lenB > 80 && lenA > lenB / 3 && lenB > lenA / 3)
-        return { diffMessage: msgB, diffText: textA };
+        return { diffTargetMessage: msgB, diffPrevText: textA };
     }
-    return { diffMessage: undefined, diffText: undefined };
+    return { diffTargetMessage: undefined, diffPrevText: undefined };
   }, [conversationMessages]);
 
 
@@ -204,35 +206,42 @@ export function ChatMessageList(props: {
         />
       )}
 
-      {filteredMessages.map((message, idx, { length: count }) =>
-        props.isMessageSelectionMode ? (
+      {filteredMessages.map((message, idx, { length: count }) => {
 
-          <CleanerMessage
-            key={'sel-' + message.id}
-            message={message}
-            remainingTokens={props.chatLLMContextTokens ? (props.chatLLMContextTokens - historyTokenCount) : undefined}
-            selected={selectedMessages.has(message.id)} onToggleSelected={handleSelectMessage}
-          />
+          // Optimization: if the component is going to change (e.g. the message is typing), we don't want to memoize it to not throw garbage in memory
+          const ChatMessageMemoOrNot = message.typing ? ChatMessage : ChatMessageMemo;
 
-        ) : (
+          return props.isMessageSelectionMode ? (
 
-          <ChatMessageMemo
-            key={'msg-' + message.id}
-            message={message}
-            diffPreviousText={message === diffMessage ? diffText : undefined}
-            isBottom={idx === count - 1}
-            isImagining={isImagining} isSpeaking={isSpeaking}
-            onConversationBranch={handleConversationBranch}
-            onConversationRestartFrom={handleConversationRestartFrom}
-            onConversationTruncate={handleConversationTruncate}
-            onMessageDelete={handleMessageDelete}
-            onMessageEdit={handleMessageEdit}
-            onTextDiagram={handleTextDiagram}
-            onTextImagine={handleTextImagine}
-            onTextSpeak={handleTextSpeak}
-          />
+            <CleanerMessage
+              key={'sel-' + message.id}
+              message={message}
+              remainingTokens={props.chatLLMContextTokens ? (props.chatLLMContextTokens - historyTokenCount) : undefined}
+              selected={selectedMessages.has(message.id)} onToggleSelected={handleSelectMessage}
+            />
 
-        ),
+          ) : (
+
+            <ChatMessageMemoOrNot
+              key={'msg-' + message.id}
+              message={message}
+              diffPreviousText={message === diffTargetMessage ? diffPrevText : undefined}
+              isBottom={idx === count - 1}
+              isImagining={isImagining}
+              isMobile={props.isMobile}
+              isSpeaking={isSpeaking}
+              onConversationBranch={handleConversationBranch}
+              onConversationRestartFrom={handleConversationRestartFrom}
+              onConversationTruncate={handleConversationTruncate}
+              onMessageDelete={handleMessageDelete}
+              onMessageEdit={handleMessageEdit}
+              onTextDiagram={handleTextDiagram}
+              onTextImagine={handleTextImagine}
+              onTextSpeak={handleTextSpeak}
+            />
+
+          );
+        },
       )}
 
     </List>

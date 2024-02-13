@@ -2,7 +2,9 @@ import * as React from 'react';
 
 import { FormControl, Typography } from '@mui/joy';
 import AddAPhotoIcon from '@mui/icons-material/AddAPhoto';
-import VerticalSplitIcon from '@mui/icons-material/VerticalSplit';
+import ScreenshotMonitorIcon from '@mui/icons-material/ScreenshotMonitor';
+import SpeedIcon from '@mui/icons-material/Speed';
+import TitleIcon from '@mui/icons-material/Title';
 
 import { FormLabelStart } from '~/common/components/forms/FormLabelStart';
 import { FormSwitchControl } from '~/common/components/forms/FormSwitchControl';
@@ -11,31 +13,48 @@ import { useIsMobile } from '~/common/components/useMatchMedia';
 import { useUXLabsStore } from '~/common/state/store-ux-labs';
 
 
+// uncomment for more settings
+// const DEV_MODE_SETTINGS = false;
+
+
 export function UxLabsSettings() {
 
   // external state
   const isMobile = useIsMobile();
   const {
-    labsCameraDesktop, labsSplitBranching,
-    setLabsCameraDesktop, setLabsSplitBranching,
+    labsAttachScreenCapture, setLabsAttachScreenCapture,
+    labsCameraDesktop, setLabsCameraDesktop,
+    labsChatBarAlt, setLabsChatBarAlt,
+    labsHighPerformance, setLabsHighPerformance,
   } = useUXLabsStore();
 
   return <>
 
+    <FormSwitchControl
+      title={<><SpeedIcon color={labsHighPerformance ? 'primary' : undefined} sx={{ mr: 0.25 }} />Performance</>} description={'v1.14 · ' + (labsHighPerformance ? 'Unlocked' : 'Default')}
+      checked={labsHighPerformance} onChange={setLabsHighPerformance}
+    />
+
+    <FormSwitchControl
+      title={<><TitleIcon color={labsChatBarAlt ? 'primary' : undefined} sx={{ mr: 0.25 }} />Chat Title</>} description={'v1.14 · ' + (labsChatBarAlt === 'title' ? 'Show Title' : 'Show Options')}
+      checked={labsChatBarAlt === 'title'} onChange={(on) => setLabsChatBarAlt(on ? 'title' : false)}
+    />
+
     {!isMobile && <FormSwitchControl
-      title={<><AddAPhotoIcon color={labsCameraDesktop ? 'primary' : undefined} sx={{ mr: 0.25 }} /> Webcam</>} description={labsCameraDesktop ? 'Enabled' : 'Disabled'}
+      title={<><ScreenshotMonitorIcon color={labsAttachScreenCapture ? 'primary' : undefined} sx={{ mr: 0.25 }} /> Screen Capture</>} description={'v1.13 · ' + (labsAttachScreenCapture ? 'Enabled' : 'Disabled')}
+      checked={labsAttachScreenCapture} onChange={setLabsAttachScreenCapture}
+    />}
+
+    {!isMobile && <FormSwitchControl
+      title={<><AddAPhotoIcon color={labsCameraDesktop ? 'primary' : undefined} sx={{ mr: 0.25 }} /> Webcam</>} description={/*'v1.8 · ' +*/ (labsCameraDesktop ? 'Enabled' : 'Disabled')}
       checked={labsCameraDesktop} onChange={setLabsCameraDesktop}
     />}
 
-    <FormSwitchControl
-      title={<><VerticalSplitIcon color={labsSplitBranching ? 'primary' : undefined} sx={{ mr: 0.25 }} /> Split Branching</>} description={labsSplitBranching ? 'Enabled' : 'Disabled'}
-      checked={labsSplitBranching} onChange={setLabsSplitBranching}
-    />
-
     <FormControl orientation='horizontal' sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
-      <FormLabelStart title='Graduated' />
+      <FormLabelStart title='Graduated' description='Ex-labs' />
       <Typography level='body-xs'>
-        <Link href='https://github.com/enricoros/big-AGI/issues/359' target='_blank'>Draw</Link>
+        <Link href='https://github.com/enricoros/big-AGI/issues/208' target='_blank'>Split Chats</Link>
+        {' · '}<Link href='https://github.com/enricoros/big-AGI/issues/359' target='_blank'>Draw App</Link>
         {' · '}<Link href='https://github.com/enricoros/big-AGI/issues/354' target='_blank'>Call AGI</Link>
         {' · '}<Link href='https://github.com/enricoros/big-AGI/issues/282' target='_blank'>Persona Creator</Link>
         {' · '}<Link href='https://github.com/enricoros/big-agi/issues/192' target='_blank'>Auto Diagrams</Link>

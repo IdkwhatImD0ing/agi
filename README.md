@@ -11,7 +11,7 @@ Pros use big-AGI. 🚀 Developers love big-AGI. 🤖
 
 Or fork & run on Vercel
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fenricoros%2Fbig-agi&env=OPENAI_API_KEY&envDescription=Backend%20API%20keys%2C%20optional%20and%20may%20be%20overridden%20by%20the%20UI.&envLink=https%3A%2F%2Fgithub.com%2Fenricoros%2Fbig-AGI%2Fblob%2Fmain%2Fdocs%2Fenvironment-variables.md&project-name=big-agi)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fenricoros%2Fbig-AGI&env=OPENAI_API_KEY&envDescription=Backend%20API%20keys%2C%20optional%20and%20may%20be%20overridden%20by%20the%20UI.&envLink=https%3A%2F%2Fgithub.com%2Fenricoros%2Fbig-AGI%2Fblob%2Fmain%2Fdocs%2Fenvironment-variables.md&project-name=big-AGI)
 
 ## 👉 [roadmap](https://github.com/users/enricoros/projects/4/views/2)
 
@@ -21,7 +21,19 @@ shows the current developments and future ideas.
 - Got a suggestion? [_Add your roadmap ideas_](https://github.com/enricoros/big-agi/issues/new?&template=roadmap-request.md)
 - Want to contribute? [_Pick up a task!_](https://github.com/users/enricoros/projects/4/views/4) - _easy_ to _pro_
 
-## What's New in 1.12.0 · Jan 26, 2024 · AGI Hotline
+### What's New in 1.13.0 · Feb 8, 2024 · Multi + Mind
+
+https://github.com/enricoros/big-AGI/assets/32999/01732528-730e-41dc-adc7-511385686b13
+
+- **Side-by-Side Split Windows**: multitask with parallel conversations. [#208](https://github.com/enricoros/big-AGI/issues/208)
+- **Multi-Chat Mode**: message everyone, all at once. [#388](https://github.com/enricoros/big-AGI/issues/388)
+- **Export tables as CSV**: big thanks to @aj47. [#392](https://github.com/enricoros/big-AGI/pull/392)
+- Adjustable text size: customize density. [#399](https://github.com/enricoros/big-AGI/issues/399)
+- Dev2 Persona Technology Preview
+- Better looking chats with improved spacing, fonts, and menus
+- More: new video player, [LM Studio tutorial](https://github.com/enricoros/big-AGI/blob/main/docs/config-lmstudio.md) (thanks @aj47), [MongoDB support](https://github.com/enricoros/big-AGI/blob/main/docs/config-database.md) (thanks @ranfysvalle02), and speedups
+
+### What's New in 1.12.0 · Jan 26, 2024 · AGI Hotline
 
 https://github.com/enricoros/big-AGI/assets/32999/95ceb03c-945d-4fdd-9a9f-3317beb54f3f
 
@@ -45,21 +57,11 @@ https://github.com/enricoros/big-AGI/assets/1590910/a6b8e172-0726-4b03-a5e5-10cf
 - Enable adding up to five custom OpenAI-compatible endpoints
 - Developer enhancements: new 'Actiles' framework
 
-### What's New in 1.10.0 · Jan 6, 2024 · The Year of AGI
-
-- **New UI**: for both desktop and mobile, sets the stage for future scale. [#201](https://github.com/enricoros/big-AGI/issues/201)
-- **Conversation Folders**: enhanced conversation organization. [#321](https://github.com/enricoros/big-AGI/issues/321)
-- **[LM Studio](https://lmstudio.ai/)** support and improved token management
-- Resizable panes in split-screen conversations.
-- Large performance optimizations
-- Developer enhancements: new UI framework, updated documentation for proxy settings on browserless/docker
-
 For full details and former releases, check out the [changelog](docs/changelog.md).
 
 ## ✨ Key Features 👊
 
-![Ask away, paste a ton, copy the gems](docs/pixels/big-AGI-compo1.png)
-[More](docs/pixels/big-AGI-compo2b.png), [screenshots](docs/pixels).
+![big-AGI screenshot](docs/pixels/big-AGI-compo-20240201_small.png)
 
 - **AI Personas**: Tailor your AI interactions with customizable personas
 - **Sleek UI/UX**: A smooth, intuitive, and mobile-responsive interface
@@ -144,7 +146,7 @@ Please refer to the [Cloudflare deployment documentation](docs/deploy-cloudflare
 
 Create your GitHub fork, create a Vercel project over that fork, and deploy it. Or press the button below for convenience.
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fenricoros%2Fbig-agi&env=OPENAI_API_KEY&envDescription=Backend%20API%20keys%2C%20optional%20and%20may%20be%20overridden%20by%20the%20UI.&envLink=https%3A%2F%2Fgithub.com%2Fenricoros%2Fbig-AGI%2Fblob%2Fmain%2Fdocs%2Fenvironment-variables.md&project-name=big-agi)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fenricoros%2Fbig-AGI&env=OPENAI_API_KEY&envDescription=Backend%20API%20keys%2C%20optional%20and%20may%20be%20overridden%20by%20the%20UI.&envLink=https%3A%2F%2Fgithub.com%2Fenricoros%2Fbig-AGI%2Fblob%2Fmain%2Fdocs%2Fenvironment-variables.md&project-name=big-AGI)
 
 ## Integrations:
 
@@ -153,6 +155,7 @@ Create your GitHub fork, create a Vercel project over that fork, and deploy it. 
 * [Helicone](https://www.helicone.ai/) LLM Observability Platform - Models > OpenAI > Advanced > API Host: 'oai.hconeai.com'
 * [Paste.gg](https://paste.gg/) Paste Sharing - Chat Menu > Share via paste.gg
 * [Prodia](https://prodia.com/) Image Generation - Settings > Image Generation > Api Key & Model
+* External code execution: export to [CodePen](https://codepen.io/pen/), [StackBlitz](https://stackblitz.com/), [JSFiddle](https://jsfiddle.net/)
 
 <br/>
 

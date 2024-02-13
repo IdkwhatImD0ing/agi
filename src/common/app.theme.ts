@@ -1,4 +1,5 @@
 import createCache from '@emotion/cache';
+
 import { Inter, JetBrains_Mono } from 'next/font/google';
 import { extendTheme } from '@mui/joy';
 import { keyframes } from '@emotion/react';
@@ -9,7 +10,7 @@ export const hideOnMobile = { display: { xs: 'none', md: 'flex' } };
 // export const hideOnDesktop = { display: { xs: 'flex', md: 'none' } };
 
 // Dimensions
-export const formLabelStartWidth = 150;
+export const formLabelStartWidth = 140;
 
 
 // Theme & Fonts
@@ -38,7 +39,7 @@ export const appTheme = extendTheme({
       palette: {
         neutral: {
           plainColor: 'var(--joy-palette-neutral-800)',     // [700 -> 800] Dropdown menu: increase text contrast a bit
-          solidBg: 'var(--joy-palette-neutral-700)',        // [500 -> 700] AppBar background & Button[solid]
+          solidBg: 'var(--joy-palette-neutral-700)',        // [500 -> 700] PageBar background & Button[solid]
           solidHoverBg: 'var(--joy-palette-neutral-800)',   // [600 -> 800] Buttons[solid]:hover
         },
         // primary [800] > secondary [700 -> 800] > tertiary [600] > icon [500 -> 700]
@@ -103,6 +104,15 @@ export const appTheme = extendTheme({
       },
     },
 
+    // JoyModal: {
+    //   styleOverrides: {
+    //     backdrop: {
+    //       // backdropFilter: 'blur(2px)',
+    //       backdropFilter: 'none',
+    //     },
+    //   },
+    // },
+
     /**
      * Switch: increase the size of the thumb, to a default iconButton
      * NOTE: do not use anything else than 'md' size
@@ -111,9 +121,9 @@ export const appTheme = extendTheme({
       styleOverrides: {
         root: ({ ownerState }) => ({
           ...(ownerState.size === 'md' && {
-            '--Switch-trackWidth': '40px',
-            '--Switch-trackHeight': '24px',
-            '--Switch-thumbSize': '18px',
+            '--Switch-trackWidth': '36px',
+            '--Switch-trackHeight': '22px',
+            '--Switch-thumbSize': '17px',
           }),
         }),
       },
@@ -125,14 +135,62 @@ export const themeBgApp = 'background.level1';
 export const themeBgAppDarker = 'background.level2';
 export const themeBgAppChatComposer = 'background.surface';
 
-export const lineHeightChatText = 1.75;
-export const lineHeightTextarea = 1.75;
+export const lineHeightChatTextMd = 1.75;
+export const lineHeightTextareaMd = 1.75;
 
 export const themeZIndexPageBar = 25;
 export const themeZIndexDesktopDrawer = 26;
 export const themeZIndexDesktopNav = 27;
+export const themeZIndexOverMobileDrawer = 1301;
 
 export const themeBreakpoints = appTheme.breakpoints.values;
+
+
+// Dyanmic UI Sizing
+export type ContentScaling = 'xs' | 'sm' | 'md';
+
+interface ContentScalingOptions {
+  // BlocksRenderer
+  blockCodeFontSize: string;
+  blockFontSize: string;
+  blockLineHeight: string | number;
+  // ChatMessage
+  chatMessagePadding: number;
+  // ChatDrawer
+  chatDrawerItemSx: { '--ListItem-minHeight': string, fontSize: string };
+  chatDrawerItemFolderSx: { '--ListItem-minHeight': string, fontSize: string };
+}
+
+export const themeScalingMap: Record<ContentScaling, ContentScalingOptions> = {
+  xs: {
+    blockCodeFontSize: '0.75rem',
+    blockFontSize: 'xs',
+    blockLineHeight: 1.666667,
+    chatMessagePadding: 1.25,
+    chatDrawerItemSx: { '--ListItem-minHeight': '2.25rem', fontSize: 'sm' },          // 36px
+    chatDrawerItemFolderSx: { '--ListItem-minHeight': '2.5rem', fontSize: 'sm' },     // 40px
+  },
+  sm: {
+    blockCodeFontSize: '0.75rem',
+    blockFontSize: 'sm',
+    blockLineHeight: 1.714286,
+    chatMessagePadding: 1.5,
+    chatDrawerItemSx: { '--ListItem-minHeight': '2.25rem', fontSize: 'sm' },
+    chatDrawerItemFolderSx: { '--ListItem-minHeight': '2.5rem', fontSize: 'sm' },
+  },
+  md: {
+    blockCodeFontSize: '0.875rem',
+    blockFontSize: 'md',
+    blockLineHeight: 1.75,
+    chatMessagePadding: 2,
+    chatDrawerItemSx: { '--ListItem-minHeight': '2.5rem', fontSize: 'md' },           // 40px
+    chatDrawerItemFolderSx: { '--ListItem-minHeight': '2.75rem', fontSize: 'md' },    // 44px
+  },
+  // lg: {
+  //   chatDrawerFoldersLineHeight: '3rem',
+  // },
+};
+
 
 export const cssRainbowColorKeyframes = keyframes`
     100%, 0% {

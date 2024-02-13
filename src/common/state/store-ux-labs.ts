@@ -12,11 +12,17 @@ import { persist } from 'zustand/middleware';
  */
 interface UXLabsStore {
 
+  labsAttachScreenCapture: boolean;
+  setLabsAttachScreenCapture: (labsAttachScreenCapture: boolean) => void;
+
   labsCameraDesktop: boolean;
   setLabsCameraDesktop: (labsCameraDesktop: boolean) => void;
 
-  labsSplitBranching: boolean;
-  setLabsSplitBranching: (labsSplitBranching: boolean) => void;
+  labsChatBarAlt: false | 'title',
+  setLabsChatBarAlt: (labsChatBarAlt: false | 'title') => void;
+
+  labsHighPerformance: boolean;
+  setLabsHighPerformance: (labsHighPerformance: boolean) => void;
 
 }
 
@@ -24,11 +30,17 @@ export const useUXLabsStore = create<UXLabsStore>()(
   persist(
     (set) => ({
 
+      labsAttachScreenCapture: false,
+      setLabsAttachScreenCapture: (labsAttachScreenCapture: boolean) => set({ labsAttachScreenCapture }),
+
       labsCameraDesktop: false,
       setLabsCameraDesktop: (labsCameraDesktop: boolean) => set({ labsCameraDesktop }),
 
-      labsSplitBranching: false,
-      setLabsSplitBranching: (labsSplitBranching: boolean) => set({ labsSplitBranching }),
+      labsChatBarAlt: false,
+      setLabsChatBarAlt: (labsChatBarAlt: false | 'title') => set({ labsChatBarAlt }),
+
+      labsHighPerformance: false,
+      setLabsHighPerformance: (labsHighPerformance: boolean) => set({ labsHighPerformance }),
 
     }),
     {
@@ -36,3 +48,7 @@ export const useUXLabsStore = create<UXLabsStore>()(
     },
   ),
 );
+
+export function getUXLabsHighPerformance() {
+  return useUXLabsStore.getState().labsHighPerformance;
+}
