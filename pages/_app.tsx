@@ -26,37 +26,36 @@ import { ClerkLoaded, ClerkProvider, useUser } from '@clerk/nextjs';
 import { firestore } from 'src/firebase';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 
-const MyApp = ({ Component, emotionCache, pageProps }: MyAppProps) =>
+const MyApp = ({ Component, emotionCache, pageProps }: MyAppProps) => (
   <ClerkProvider>
-
     <Head>
       <title>{Brand.Title.Common}</title>
-      <meta name='viewport' content='minimum-scale=1, initial-scale=1, width=device-width, shrink-to-fit=no' />
+      <meta name="viewport" content="minimum-scale=1, initial-scale=1, width=device-width, shrink-to-fit=no" />
     </Head>
 
-      <ProviderTheming emotionCache={emotionCache}>
-        <ProviderSingleTab>
-          <ProviderBootstrapLogic>
-            <ProviderTRPCQueryClient>
-              <ProviderSnacks>
-                <ProviderBackendAndNoSSR>
-                  <ClerkLoaded>
-                    <Redirect />
-                    <Component {...pageProps} />
-                  </ClerkLoaded>
-                </ProviderBackendAndNoSSR>
-              </ProviderSnacks>
-            </ProviderTRPCQueryClient>
-          </ProviderBootstrapLogic>
-        </ProviderSingleTab>
-      </ProviderTheming>
+    <ProviderTheming emotionCache={emotionCache}>
+      <ProviderSingleTab>
+        <ProviderBootstrapLogic>
+          <ProviderTRPCQueryClient>
+            <ProviderSnacks>
+              <ProviderBackendAndNoSSR>
+                <ClerkLoaded>
+                  <Redirect />
+                  <Component {...pageProps} />
+                </ClerkLoaded>
+              </ProviderBackendAndNoSSR>
+            </ProviderSnacks>
+          </ProviderTRPCQueryClient>
+        </ProviderBootstrapLogic>
+      </ProviderSingleTab>
+    </ProviderTheming>
 
-      {isVercelFromFrontend && <VercelAnalytics debug={false} />}
-      {isVercelFromFrontend && <VercelSpeedInsights debug={false} sampleRate={1 / 2} />}
+    {isVercelFromFrontend && <VercelAnalytics debug={false} />}
+    {isVercelFromFrontend && <VercelSpeedInsights debug={false} sampleRate={1 / 2} />}
     {hasGoogleAnalytics && <OptionalGoogleAnalytics />}
-    </ClerkProvider>
-  );
-};
+  </ClerkProvider>
+);
+
 const allowedURLS = ['/', '/sign-in', '/sign-up', '/privacy', '/terms'];
 
 const Redirect = () => {
