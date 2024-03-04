@@ -7,18 +7,22 @@ import type { ChatNavigationItemData } from './ChatDrawerItem';
 
 
 // configuration
-const AUTO_UNDERLINE_COUNT = 40;
 const SEARCH_MIN_CHARS = 3;
 
 
 export type ChatNavGrouping = false | 'date' | 'persona';
 
-export interface ChatNavigationGroupData {
+interface ChatNavigationGroupData {
   type: 'nav-item-group',
   title: string,
 }
 
-type ChatRenderItemData = ChatNavigationItemData | ChatNavigationGroupData;
+interface ChatNavigationInfoMessage {
+  type: 'nav-item-info-message',
+  message: string,
+}
+
+type ChatRenderItemData = ChatNavigationItemData | ChatNavigationGroupData | ChatNavigationInfoMessage;
 
 
 // Returns a string with the pane indices where the conversation is also open, or false if it's not
@@ -74,12 +78,14 @@ export function useChatNavRenderItems(
   activeFolder: DFolder | null,
   allFolders: DFolder[],
   grouping: ChatNavGrouping,
+  showRelativeSize: boolean,
 ): {
   renderNavItems: ChatRenderItemData[],
   filteredChatIDs: DConversationId[],
   filteredChatsCount: number,
   filteredChatsAreEmpty: boolean,
-  filterefChatsBarBasis: number,
+  filteredChatsBarBasis: number,
+  filteredChatsIncludeActive: boolean,
 } {
   return useChatStore(({ conversations }) => {
 
@@ -125,6 +131,9 @@ export function useChatNavRenderItems(
         };
       }).filter(item => !isSearching || item.searchFrequency > 0);
 
+      // check if the active conversation has an item in the list
+      const filteredChatsIncludeActive = chatNavItems.some(_c => _c.conversationId === activeConversationId);
+
 
       // [sort by frequency, don't group] if there's a search query
       chatNavItems.sort((a, b) => b.searchFrequency - a.searchFrequency);
@@ -132,8 +141,16 @@ export function useChatNavRenderItems(
       // Render List
       let renderNavItems: ChatRenderItemData[] = chatNavItems;
 
+      // [search] add a header if searching
+      if (isSearching) {
+
+        // only prepend a 'Results' group if there are results
+        if (chatNavItems.length)
+          renderNavItems = [{ type: 'nav-item-group', title: 'Search results' }, ...chatNavItems];
+
+      }
       // [grouping] group by date or persona
-      if (!isSearching && grouping) {
+      else if (grouping) {
 
         // [grouping/date]: sort by update time
         const midnightTime = getNextMidnightTime();
@@ -160,11 +177,15 @@ export function useChatNavRenderItems(
         ]);
       }
 
+      // [empty message] if there are no items
+      if (!renderNavItems.length)
+        renderNavItems.push({ type: 'nav-item-info-message', message: isSearching ? 'No results found' : 'No conversations in folder' });
+
       // other derived state
       const filteredChatIDs = chatNavItems.map(_c => _c.conversationId);
       const filteredChatsCount = chatNavItems.length;
       const filteredChatsAreEmpty = !filteredChatsCount || (filteredChatsCount === 1 && chatNavItems[0].isEmpty);
-      const filterefChatsBarBasis = (filteredChatsCount >= AUTO_UNDERLINE_COUNT || isSearching)
+      const filteredChatsBarBasis = ((showRelativeSize && filteredChatsCount >= 2) || isSearching)
         ? chatNavItems.reduce((longest, _c) => Math.max(longest, isSearching ? _c.searchFrequency : _c.messageCount), 1)
         : 0;
 
@@ -173,14 +194,17 @@ export function useChatNavRenderItems(
         filteredChatIDs,
         filteredChatsCount,
         filteredChatsAreEmpty,
-        filterefChatsBarBasis,
+        filteredChatsBarBasis,
+        filteredChatsIncludeActive,
       };
     },
     (a, b) => {
       // we only compare the renderNavItems array, which shall be changed if the rest changes
       return a.renderNavItems.length === b.renderNavItems.length
         && a.renderNavItems.every((_a, i) => shallow(_a, b.renderNavItems[i]))
-        && shallow(a.filteredChatIDs, b.filteredChatIDs);
+        && shallow(a.filteredChatIDs, b.filteredChatIDs)
+        // we also compare this, as it changes with a parameter
+        && a.filteredChatsBarBasis === b.filteredChatsBarBasis;
     },
   );
 }

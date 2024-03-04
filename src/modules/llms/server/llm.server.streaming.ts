@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { NextRequest, NextResponse } from 'next/server';
 import { createParser as createEventsourceParser, EventSourceParseCallback, EventSourceParser, ParsedEvent, ReconnectInterval } from 'eventsource-parser';
 
-import { createEmptyReadableStream, debugGenerateCurlCommand, safeErrorString, SERVER_DEBUG_WIRE, serverFetchOrThrow } from '~/server/wire';
+import { createEmptyReadableStream, debugGenerateCurlCommand, nonTrpcServerFetchOrThrow, safeErrorString, SERVER_DEBUG_WIRE } from '~/server/wire';
 
 
 // Anthropic server imports
@@ -93,12 +93,14 @@ export async function llmStreamingRelayHandler(req: NextRequest): Promise<Respon
         break;
 
       case 'azure':
+      case 'groq':
       case 'lmstudio':
       case 'localai':
       case 'mistral':
       case 'oobabooga':
       case 'openai':
       case 'openrouter':
+      case 'perplexity':
       case 'togetherai':
         requestAccess = openAIAccess(access, model.id, '/v1/chat/completions');
         body = openAIChatCompletionPayload(model, history, null, null, 1, true);
@@ -110,7 +112,7 @@ export async function llmStreamingRelayHandler(req: NextRequest): Promise<Respon
       console.log('-> streaming:', debugGenerateCurlCommand('POST', requestAccess.url, requestAccess.headers, body));
 
     // POST to our API route
-    upstreamResponse = await serverFetchOrThrow(requestAccess.url, 'POST', requestAccess.headers, body);
+    upstreamResponse = await nonTrpcServerFetchOrThrow(requestAccess.url, 'POST', requestAccess.headers, body);
 
   } catch (error: any) {
     const fetchOrVendorError = safeErrorString(error) + (error?.cause ? ' · ' + error.cause : '');
@@ -271,7 +273,14 @@ function createStreamParserGemini(modelName: string): AIStreamParser {
 
     // parse the JSON chunk
     const wireGenerationChunk = JSON.parse(data);
-    const generationChunk = geminiGeneratedContentResponseSchema.parse(wireGenerationChunk);
+    let generationChunk: ReturnType<typeof geminiGeneratedContentResponseSchema.parse>;
+    try {
+      generationChunk = geminiGeneratedContentResponseSchema.parse(wireGenerationChunk);
+    } catch (error: any) {
+      // log the malformed data to the console, and rethrow to transmit as 'error'
+      console.log(`/api/llms/stream: Gemini parsing issue: ${error?.message || error}`, wireGenerationChunk);
+      throw error;
+    }
 
     // Prompt Safety Errors: pass through errors from Gemini
     if (generationChunk.promptFeedback?.blockReason) {
@@ -281,12 +290,19 @@ function createStreamParserGemini(modelName: string): AIStreamParser {
 
     // expect a single completion
     const singleCandidate = generationChunk.candidates?.[0] ?? null;
-    if (!singleCandidate || !singleCandidate.content?.parts.length)
+    if (!singleCandidate)
       throw new Error(`Gemini: expected 1 completion, got ${generationChunk.candidates?.length}`);
 
+    // no contents: could be an expected or unexpected condition
+    if (!singleCandidate.content) {
+      if (singleCandidate.finishReason === 'MAX_TOKENS')
+        return { text: ' 🧱', close: true };
+      throw new Error('Gemini: server response missing content');
+    }
+
     // expect a single part
-    if (singleCandidate.content.parts.length !== 1 || !('text' in singleCandidate.content.parts[0]))
-      throw new Error(`Gemini: expected 1 text part, got ${singleCandidate.content.parts.length}`);
+    if (singleCandidate.content.parts?.length !== 1 || !('text' in singleCandidate.content.parts[0]))
+      throw new Error(`Gemini: expected 1 text part, got ${singleCandidate.content.parts?.length}`);
 
     // expect a single text in the part
     let text = singleCandidate.content.parts[0].text || '';

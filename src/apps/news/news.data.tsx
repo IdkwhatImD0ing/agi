@@ -16,10 +16,6 @@ import coverV113 from '../../../public/images/covers/release-cover-v1.13.0.png';
 import coverV112 from '../../../public/images/covers/release-cover-v1.12.0.png';
 
 
-// update this variable every time you want to broadcast a new version to clients
-export const incrementalVersion: number = 13;
-
-
 const wowStyle: SxProps = {
   textDecoration: 'underline',
   textDecorationThickness: '0.4em',
@@ -43,7 +39,7 @@ function B(props: {
       : props.code ? `${Brand.URIs.OpenRepo}/blob/main/${props.code}`
         : props.href;
   const boldText = (
-    <Typography component='span' color={!!href ? 'primary' : 'neutral'} sx={{ fontWeight: 600 }}>
+    <Typography component='span' color={!!href ? 'primary' : 'neutral'} sx={{ fontWeight: 'lg' }}>
       {props.children}
     </Typography>
   );
@@ -210,7 +206,7 @@ export const NewsItems: NewsItem[] = [
     items: [
       { text: <>New <B issue={251} wow>attachments system</B>: drag, paste, link, snap, images, text, pdfs</> },
       { text: <>Desktop <B issue={253}>webcam access</B> for direct image capture (Labs option)</> },
-      { text: <>Independent browsing with <B code='/docs/config-browse.md'>Browserless</B> support</> },
+      { text: <>Independent browsing with <B code='/docs/config-feature-browse.md'>Browserless</B> support</> },
       { text: <><B issue={256}>Overheat</B> LLMs with higher temperature limits</> },
       { text: <>Enhanced security via <B code='/docs/deploy-authentication.md'>password protection</B></> },
       { text: <>{platformAwareKeystrokes('Ctrl+Shift+O')}: quick access to model options</> },
@@ -223,7 +219,7 @@ export const NewsItems: NewsItem[] = [
     versionName: 'Surf\'s Up',
     versionDate: new Date('2023-11-28T21:00:00Z'),
     items: [
-      { text: <><B issue={237} wow>Web Browsing</B> support, see the <B code='/docs/config-browse.md'>browsing user guide</B></> },
+      { text: <><B issue={237} wow>Web Browsing</B> support, see the <B code='/docs/config-feature-browse.md'>browsing user guide</B></> },
       { text: <><B issue={235}>Branching Discussions</B> at any message</> },
       { text: <><B issue={207}>Keyboard Navigation</B>: use {platformAwareKeystrokes('Ctrl+Shift+Left/Right')} to navigate chats</> },
       { text: <><B issue={236}>UI fixes</B> (thanks to the first sponsor)</> },
@@ -240,7 +236,7 @@ export const NewsItems: NewsItem[] = [
     items: [
       { text: <><B issue={190} wow>Continued Voice</B> for hands-free interaction</> },
       { text: <><B issue={192}>Visualization</B> Tool for data representations</> },
-      { text: <><B code='/docs/config-ollama.md'>Ollama (guide)</B> local models support</> },
+      { text: <><B code='/docs/config-local-ollama.md'>Ollama (guide)</B> local models support</> },
       { text: <><B issue={194}>Text Tools</B> including highlight differences</> },
       { text: <><B href='https://mermaid.js.org/'>Mermaid</B> Diagramming Rendering</> },
       { text: <><B>OpenAI 1106</B> Chat Models</> },

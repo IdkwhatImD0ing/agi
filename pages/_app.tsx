@@ -1,7 +1,7 @@
 import * as React from 'react';
 import Head from 'next/head';
 import { MyAppProps } from 'next/app';
-import { Analytics as VercelAnalytics } from '@vercel/analytics/react';
+import { Analytics as VercelAnalytics } from '@vercel/analytics/next';
 import { SpeedInsights as VercelSpeedInsights } from '@vercel/speed-insights/next';
 import { useRouter } from 'next/navigation';
 
@@ -20,18 +20,19 @@ import { ProviderSingleTab } from '~/common/providers/ProviderSingleTab';
 import { ProviderSnacks } from '~/common/providers/ProviderSnacks';
 import { ProviderTRPCQueryClient } from '~/common/providers/ProviderTRPCQueryClient';
 import { ProviderTheming } from '~/common/providers/ProviderTheming';
-
+import { hasGoogleAnalytics, OptionalGoogleAnalytics } from '~/common/components/GoogleAnalytics';
+import { isVercelFromFrontend } from '~/common/util/pwaUtils';
 import { ClerkLoaded, ClerkProvider, useUser } from '@clerk/nextjs';
 import { firestore } from 'src/firebase';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 
-const MyApp = ({ Component, emotionCache, pageProps }: MyAppProps) => {
-  return (
-    <ClerkProvider>
-      <Head>
-        <title>{Brand.Title.Common}</title>
-        <meta name="viewport" content="minimum-scale=1, initial-scale=1, width=device-width, shrink-to-fit=no" />
-      </Head>
+const MyApp = ({ Component, emotionCache, pageProps }: MyAppProps) =>
+  <ClerkProvider>
+
+    <Head>
+      <title>{Brand.Title.Common}</title>
+      <meta name='viewport' content='minimum-scale=1, initial-scale=1, width=device-width, shrink-to-fit=no' />
+    </Head>
 
       <ProviderTheming emotionCache={emotionCache}>
         <ProviderSingleTab>
@@ -50,8 +51,9 @@ const MyApp = ({ Component, emotionCache, pageProps }: MyAppProps) => {
         </ProviderSingleTab>
       </ProviderTheming>
 
-      <VercelAnalytics debug={false} />
-      <VercelSpeedInsights debug={false} sampleRate={1 / 10} />
+      {isVercelFromFrontend && <VercelAnalytics debug={false} />}
+      {isVercelFromFrontend && <VercelSpeedInsights debug={false} sampleRate={1 / 2} />}
+    {hasGoogleAnalytics && <OptionalGoogleAnalytics />}
     </ClerkProvider>
   );
 };

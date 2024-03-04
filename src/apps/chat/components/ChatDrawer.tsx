@@ -19,6 +19,7 @@ import { FoldersToggleOff } from '~/common/components/icons/FoldersToggleOff';
 import { FoldersToggleOn } from '~/common/components/icons/FoldersToggleOn';
 import { PageDrawerHeader } from '~/common/layout/optima/components/PageDrawerHeader';
 import { PageDrawerList } from '~/common/layout/optima/components/PageDrawerList';
+import { capitalizeFirstLetter } from '~/common/util/textUtils';
 import { themeScalingMap, themeZIndexOverMobileDrawer } from '~/common/app.theme';
 import { useOptimaDrawers } from '~/common/layout/optima/useOptimaDrawers';
 import { useUIPreferencesStore } from '~/common/state/store-ui';
@@ -27,6 +28,7 @@ import { ChatDrawerItemMemo, FolderChangeRequest } from './ChatDrawerItem';
 import { ChatFolderList } from './folders/ChatFolderList';
 import { ChatNavGrouping, useChatNavRenderItems } from './useChatNavRenderItems';
 import { ClearFolderText } from './folders/useFolderDropdown';
+import { useChatShowRelativeSize } from '../store-app-chat';
 
 
 // this is here to make shallow comparisons work on the next hook
@@ -71,15 +73,16 @@ function ChatDrawer(props: {
   const { onConversationActivate, onConversationBranch, onConversationNew, onConversationsDelete, onConversationsExportDialog } = props;
 
   // local state
-  const [navGrouping, setNavGrouping] = React.useState<ChatNavGrouping>(false);
+  const [navGrouping, setNavGrouping] = React.useState<ChatNavGrouping>('date');
   const [debouncedSearchQuery, setDebouncedSearchQuery] = React.useState('');
   const [folderChangeRequest, setFolderChangeRequest] = React.useState<FolderChangeRequest | null>(null);
 
   // external state
   const { closeDrawer, closeDrawerOnMobile } = useOptimaDrawers();
+  const { showRelativeSize, toggleRelativeSize } = useChatShowRelativeSize();
   const { activeFolder, allFolders, enableFolders, toggleEnableFolders } = useFolders(props.activeFolderId);
-  const { filteredChatsCount, filteredChatIDs, filteredChatsAreEmpty, filterefChatsBarBasis, renderNavItems } = useChatNavRenderItems(
-    props.activeConversationId, props.chatPanesConversationIds, debouncedSearchQuery, activeFolder, allFolders, navGrouping,
+  const { filteredChatsCount, filteredChatIDs, filteredChatsAreEmpty, filteredChatsBarBasis, filteredChatsIncludeActive, renderNavItems } = useChatNavRenderItems(
+    props.activeConversationId, props.chatPanesConversationIds, debouncedSearchQuery, activeFolder, allFolders, navGrouping, showRelativeSize,
   );
   const { contentScaling, showSymbols } = useUIPreferencesStore(state => ({
     contentScaling: state.contentScaling,
@@ -90,11 +93,13 @@ function ChatDrawer(props: {
   // New/Activate/Delete Conversation
 
   const isMultiPane = props.chatPanesConversationIds.length >= 2;
+  const disableNewButton = props.disableNewButton && filteredChatsIncludeActive;
+  const newButtonDontRecycle = isMultiPane || !filteredChatsIncludeActive;
 
   const handleButtonNew = React.useCallback(() => {
-    onConversationNew(isMultiPane);
+    onConversationNew(newButtonDontRecycle);
     closeDrawerOnMobile();
-  }, [closeDrawerOnMobile, isMultiPane, onConversationNew]);
+  }, [closeDrawerOnMobile, newButtonDontRecycle, onConversationNew]);
 
   const handleConversationActivate = React.useCallback((conversationId: DConversationId, closeMenu: boolean) => {
     onConversationActivate(conversationId);
@@ -138,22 +143,38 @@ function ChatDrawer(props: {
   const groupingComponent = React.useMemo(() => (
     <Dropdown>
       <MenuButton
-        aria-label='Group by'
+        aria-label='View options'
         slots={{ root: IconButton }}
         slotProps={{ root: { size: 'sm' } }}
       >
         <MoreVertIcon sx={{ fontSize: 'xl' }} />
       </MenuButton>
-      <Menu placement='bottom-start' sx={{ zIndex: themeZIndexOverMobileDrawer /* need to be on top of the Modal on Mobile */ }}>
+      <Menu placement='bottom-start' sx={{ minWidth: 180, zIndex: themeZIndexOverMobileDrawer /* need to be on top of the Modal on Mobile */ }}>
+        <ListItem>
+          <Typography level='body-sm'>Group By</Typography>
+        </ListItem>
         {(['date', 'persona'] as const).map(_gName => (
-          <MenuItem key={'group-' + _gName} selected={navGrouping === _gName} onClick={() => setNavGrouping(grouping => grouping === _gName ? false : _gName)}>
+          <MenuItem
+            key={'group-' + _gName}
+            aria-label={`Group by ${_gName}`}
+            selected={navGrouping === _gName}
+            onClick={() => setNavGrouping(grouping => grouping === _gName ? false : _gName)}
+          >
             <ListItemDecorator>{navGrouping === _gName && <CheckIcon />}</ListItemDecorator>
-            Group by {_gName}
+            {capitalizeFirstLetter(_gName)}
           </MenuItem>
         ))}
+        <ListDivider />
+        <ListItem>
+          <Typography level='body-sm'>Show</Typography>
+        </ListItem>
+        <MenuItem onClick={toggleRelativeSize}>
+          <ListItemDecorator>{showRelativeSize && <CheckIcon />}</ListItemDecorator>
+          Relative Size
+        </MenuItem>
       </Menu>
     </Dropdown>
-  ), [navGrouping]);
+  ), [navGrouping, showRelativeSize, toggleRelativeSize]);
 
 
   return <>
@@ -208,8 +229,8 @@ function ChatDrawer(props: {
       <ListItem sx={{ mx: '0.25rem', mb: 0.5 }}>
         <ListItemButton
           // variant='outlined'
-          variant={props.disableNewButton ? undefined : 'outlined'}
-          disabled={props.disableNewButton && !isMultiPane}
+          variant={disableNewButton ? undefined : 'outlined'}
+          disabled={disableNewButton}
           onClick={handleButtonNew}
           sx={{
             // ...PageDrawerTallItemSx,
@@ -221,7 +242,7 @@ function ChatDrawer(props: {
 
             // style
             borderRadius: 'md',
-            boxShadow: (props.disableNewButton || props.isMobile) ? 'none' : 'sm',
+            boxShadow: (disableNewButton || props.isMobile) ? 'none' : 'sm',
             backgroundColor: 'background.popup',
             transition: 'box-shadow 0.2s',
           }}
@@ -254,7 +275,7 @@ function ChatDrawer(props: {
               key={'nav-chat-' + item.conversationId}
               item={item}
               showSymbols={showSymbols}
-              bottomBarBasis={showSymbols ? filterefChatsBarBasis : 0}
+              bottomBarBasis={filteredChatsBarBasis}
               onConversationActivate={handleConversationActivate}
               onConversationBranch={onConversationBranch}
               onConversationDelete={handleConversationDeleteNoConfirmation}
@@ -264,6 +285,10 @@ function ChatDrawer(props: {
           ) : item.type === 'nav-item-group' ? (
             <Typography key={'nav-divider-' + idx} level='body-xs' sx={{ textAlign: 'center', my: 'calc(var(--ListItem-minHeight) / 4)' }}>
               {item.title}
+            </Typography>
+          ) : item.type === 'nav-item-info-message' ? (
+            <Typography key={'nav-info-' + idx} level='body-xs' sx={{ textAlign: 'center', my: 'calc(var(--ListItem-minHeight) / 2)' }}>
+              {item.message}
             </Typography>
           ) : null,
         )}

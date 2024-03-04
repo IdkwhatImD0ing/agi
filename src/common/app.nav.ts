@@ -22,7 +22,7 @@ import WorkspacesIcon from '@mui/icons-material/Workspaces';
 import WorkspacesOutlinedIcon from '@mui/icons-material/WorkspacesOutlined';
 // Link icons
 import GitHubIcon from '@mui/icons-material/GitHub';
-import { DiscordIcon } from '~/common/components/icons/DiscordIcon';
+import { DiscordIcon } from '~/common/components/icons/3rdparty/DiscordIcon';
 // Modal icons
 import BuildCircleIcon from '@mui/icons-material/BuildCircle';
 import SettingsIcon from '@mui/icons-material/Settings';
@@ -115,7 +115,7 @@ export const navItems: {
       route: '/draw',
       // hideOnMobile: true,
       hideDrawer: true,
-      // _delete: true,
+      _delete: true,
     },
     {
       name: 'Cortex',
@@ -141,7 +141,7 @@ export const navItems: {
       route: '/workspace',
       hideDrawer: true,
       hideOnMobile: true,
-      // _delete: true,
+      _delete: true,
     },
     // <-- divider here -->
     {
