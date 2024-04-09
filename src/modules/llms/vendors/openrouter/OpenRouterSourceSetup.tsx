@@ -18,13 +18,12 @@ import { isValidOpenRouterKey, ModelVendorOpenRouter } from './openrouter.vendor
 export function OpenRouterSourceSetup(props: { sourceId: DModelSourceId }) {
 
   // external state
-  const { source, sourceHasLLMs, access, updateSetup } =
+  const { source, sourceHasLLMs, access, hasNoBackendCap: needsUserKey, updateSetup } =
     useSourceSetup(props.sourceId, ModelVendorOpenRouter);
 
   // derived state
   const { oaiKey } = access;
 
-  const needsUserKey = !ModelVendorOpenRouter.hasBackendCap?.();
   const keyValid = isValidOpenRouterKey(oaiKey);
   const keyError = (/*needsUserKey ||*/ !!oaiKey) && !keyValid;
   const shallFetchSucceed = oaiKey ? keyValid : !needsUserKey;
@@ -54,7 +53,7 @@ export function OpenRouterSourceSetup(props: { sourceId: DModelSourceId }) {
     </Typography>
 
     <FormInputKey
-      id='openrouter-key' label='OpenRouter API Key'
+      autoCompleteId='openrouter-key' label='OpenRouter API Key'
       rightLabel={<>{needsUserKey
         ? !oaiKey && <Link level='body-sm' href='https://openrouter.ai/keys' target='_blank'>your keys</Link>
         : '✔️ already set in server'

@@ -1,8 +1,9 @@
 import { create } from 'zustand';
-import { shallow } from 'zustand/shallow';
+import { useShallow } from 'zustand/react/shallow';
 
 /*
  NOTE: this file is used IN THE FRONTEND - it's meant to be telling the frontend what the backend capabilities are.
+ NOTE: this file is also used in the BACKEND for type safety of the returned payload.
  */
 
 export interface BackendCapabilities {
@@ -23,14 +24,15 @@ export interface BackendCapabilities {
   hasLlmPerplexity: boolean;
   hasLlmTogetherAI: boolean;
   hasVoiceElevenLabs: boolean;
+  llmConfigHash: string;
 }
 
-type BackendStore = {
+interface BackendStore extends BackendCapabilities {
   loadedCapabilities: boolean;
   setCapabilities: (capabilities: Partial<BackendCapabilities>) => void;
-} & BackendCapabilities;
+}
 
-const useBackendStore = create<BackendStore>()(
+const useBackendCapabilitiesStore = create<BackendStore>()(
   (set) => ({
 
     // capabilities
@@ -51,6 +53,7 @@ const useBackendStore = create<BackendStore>()(
     hasLlmPerplexity: false,
     hasLlmTogetherAI: false,
     hasVoiceElevenLabs: false,
+    llmConfigHash: '',
 
     loadedCapabilities: false,
     setCapabilities: (capabilities: Partial<BackendCapabilities>) =>
@@ -63,10 +66,10 @@ const useBackendStore = create<BackendStore>()(
 );
 
 
-export function useBackendCapsKnowledge(): [boolean, (capabilities: Partial<BackendCapabilities>) => void] {
-  return useBackendStore(state => [state.loadedCapabilities, state.setCapabilities], shallow);
+export function useKnowledgeOfBackendCaps(): [boolean, (capabilities: Partial<BackendCapabilities>) => void] {
+  return useBackendCapabilitiesStore(useShallow(state => [state.loadedCapabilities, state.setCapabilities]));
 }
 
-export function backendCaps(): BackendCapabilities {
-  return useBackendStore.getState();
+export function getBackendCapabilities(): BackendCapabilities {
+  return useBackendCapabilitiesStore.getState();
 }

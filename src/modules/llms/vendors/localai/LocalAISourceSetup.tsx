@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { Button, Typography } from '@mui/joy';
 import CheckBoxOutlinedIcon from '@mui/icons-material/CheckBoxOutlined';
 
-import { backendCaps } from '~/modules/backend/state-backend';
+import { getBackendCapabilities } from '~/modules/backend/store-backend-capabilities';
 
 import { ExpanderAccordion } from '~/common/components/ExpanderAccordion';
 import { FormInputKey } from '~/common/components/forms/FormInputKey';
@@ -29,8 +29,8 @@ export function LocalAISourceSetup(props: { sourceId: DModelSourceId }) {
   const [adminOpen, setAdminOpen] = React.useState(false);
 
   // external state
-  const { hasLlmLocalAIHost: backendHasHost, hasLlmLocalAIKey: backendHasKey } = backendCaps();
-  const { source, access, updateSetup } =
+  const { hasLlmLocalAIHost: backendHasHost, hasLlmLocalAIKey: backendHasKey } = getBackendCapabilities();
+  const { source, sourceHasLLMs, access, updateSetup } =
     useSourceSetup(props.sourceId, ModelVendorLocalAI);
 
   // derived state
@@ -44,7 +44,7 @@ export function LocalAISourceSetup(props: { sourceId: DModelSourceId }) {
 
   // fetch models - the OpenAI way
   const { isFetching, refetch, isError, error } =
-    useLlmUpdateModels(ModelVendorLocalAI, access, false /* !sourceHasLLMs && shallFetchSucceed */, source);
+    useLlmUpdateModels(ModelVendorLocalAI, access, !sourceHasLLMs && shallFetchSucceed, source);
 
   return <>
 
@@ -76,7 +76,7 @@ export function LocalAISourceSetup(props: { sourceId: DModelSourceId }) {
     </Typography>
 
     <FormInputKey
-      id='localai-host' label='LocalAI URL'
+      autoCompleteId='localai-host' label='LocalAI URL'
       placeholder='e.g., http://127.0.0.1:8080'
       noKey
       required={userHostRequired}
@@ -86,7 +86,7 @@ export function LocalAISourceSetup(props: { sourceId: DModelSourceId }) {
     />
 
     <FormInputKey
-      id='localai-host' label='(optional) API Key'
+      autoCompleteId='localai-key' label='(optional) API Key'
       placeholder='...'
       required={false}
       rightLabel={backendHasKey ? '✔️ already set in server' : undefined}

@@ -34,11 +34,12 @@ export function OllamaSourceSetup(props: { sourceId: DModelSourceId }) {
 
   // fetch models
   const { isFetching, refetch, isError, error } =
-    useLlmUpdateModels(ModelVendorOllama, access, false /* !sourceHasLLMs && shallFetchSucceed */, source);
+    useLlmUpdateModels(ModelVendorOllama, access, false /* use button only (we don't have server-side conf) */, source);
 
   return <>
 
     <FormTextField
+      autoCompleteId='ollama-host'
       title='Ollama Host'
       description={<Link level='body-sm' href='https://github.com/enricoros/big-agi/blob/main/docs/config-local-ollama.md' target='_blank'>information</Link>}
       placeholder='http://127.0.0.1:11434'
