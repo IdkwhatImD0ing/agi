@@ -380,6 +380,27 @@ export function localAIModelToModelDescription(modelId: string): ModelDescriptio
 // and the pricing available on: https://mistral.ai/technology/#pricing
 
 const _knownMistralChatModels: ManualMappings = [
+  // Codestral
+  {
+    idPrefix: 'codestral-2405',
+    label: 'Codestral (2405)',
+    description: 'Designed and optimized for code generation tasks.',
+    contextWindow: 32768,
+    interfaces: [LLM_IF_OAI_Chat],
+    pricing: { chatIn: 1, chatOut: 3 },
+  },
+  {
+    idPrefix: 'codestral-latest',
+    label: 'Mistral Large (latest)',
+    symLink: 'mistral-codestral-2405',
+    hidden: true,
+    // copied
+    description: 'Designed and optimized for code generation tasks.',
+    contextWindow: 32768,
+    interfaces: [LLM_IF_OAI_Chat],
+    pricing: { chatIn: 1, chatOut: 3 },
+  },
+
   // Large
   {
     idPrefix: 'mistral-large-2402',
@@ -409,7 +430,7 @@ const _knownMistralChatModels: ManualMappings = [
     label: 'Open Mixtral 8x22B (2404)',
     description: 'Mixtral 8x22B model',
     contextWindow: 65536,
-    interfaces: [LLM_IF_OAI_Chat],
+    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn],
     pricing: { chatIn: 2, chatOut: 6 },
   },
   {
@@ -420,7 +441,7 @@ const _knownMistralChatModels: ManualMappings = [
     // copied
     description: 'Mixtral 8x22B model',
     contextWindow: 65536,
-    interfaces: [LLM_IF_OAI_Chat],
+    interfaces: [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn],
     pricing: { chatIn: 2, chatOut: 6 },
   },
   // Medium (Deprecated)
@@ -562,7 +583,7 @@ const _knownMistralChatModels: ManualMappings = [
 ];
 
 const mistralModelFamilyOrder = [
-  'mistral-large', 'open-mixtral-8x22b', 'mistral-medium', 'open-mixtral-8x7b', 'mistral-small', 'open-mistral-7b', 'mistral-tiny', 'mistral-embed', '🔗',
+  'codestral', 'mistral-large', 'open-mixtral-8x22b', 'mistral-medium', 'open-mixtral-8x7b', 'mistral-small', 'open-mistral-7b', 'mistral-tiny', 'mistral-embed', '🔗',
 ];
 
 export function mistralModelToModelDescription(_model: unknown): ModelDescriptionSchema {
