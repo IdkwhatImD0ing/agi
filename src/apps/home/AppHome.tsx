@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Box, Typography, Button, CssVarsProvider } from '@mui/joy';
-import { SignInButton, SignUpButton, SignedIn, SignedOut, UserButton, useUser } from '@clerk/nextjs';
+import { Show, SignInButton, SignUpButton, UserButton, useUser } from '@clerk/nextjs';
 import { doc, getDoc } from 'firebase/firestore';
 import { useRouter } from 'next/router';
 
@@ -45,8 +45,8 @@ export default function Home() {
         }}
       >
         <Box sx={{ position: 'absolute', top: '20px', right: '20px' }}>
-          <SignedIn>{isSignedIn && <UserButton afterSignOutUrl="/" />}</SignedIn>
-          <SignedOut>
+          <Show when="signed-in">{isSignedIn && <UserButton />}</Show>
+          <Show when="signed-out">
             <SignInButton>
               <Button variant="plain" sx={{ color: 'white', mr: 1 }}>
                 Sign In
@@ -57,7 +57,7 @@ export default function Home() {
                 Sign Up
               </Button>
             </SignUpButton>
-          </SignedOut>
+          </Show>
         </Box>
         <Typography level="h1" sx={{ color: 'white', textAlign: 'center', mb: 2 }}>
           big-AGI
@@ -65,7 +65,7 @@ export default function Home() {
         <Typography level="title-lg" sx={{ color: 'white', textAlign: 'center', maxWidth: '600px' }}>
           Exploring the boundaries of AI, one conversation at a time.
         </Typography>
-        <SignedIn>
+        <Show when="signed-in">
           {isAuthCheckComplete &&
             (isAuthorized ? (
               <Button variant="solid" sx={{ mt: 2 }} onClick={() => router.push('/chat')}>
@@ -76,7 +76,7 @@ export default function Home() {
                 Sorry, you were not given permission to access the chat. Contact Bill for more details.
               </Typography>
             ))}
-        </SignedIn>
+        </Show>
         <Box sx={{ position: 'absolute', bottom: '20px', right: '20px', display: 'flex', gap: '8px' }}>
           <Button
             variant="plain"

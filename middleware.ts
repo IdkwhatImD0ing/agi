@@ -1,14 +1,23 @@
-import { authMiddleware } from "@clerk/nextjs";
+import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 
-export default authMiddleware({
+const isPublicRoute = createRouteMatcher([
+    "/",
+    "/link(.*)",
+    "/privacy(.*)",
+    "/terms(.*)",
+    "/sign-in(.*)",
+    "/sign-up(.*)",
+    "/api/edge/backend.listCapabilities",
+]);
 
-    publicRoutes: ["/", "/link", "/privacy", "/terms", "/api/edge/backend.listCapabilities"],
+export default clerkMiddleware(async (auth, req) => {
+    if (!isPublicRoute(req))
+        await auth.protect();
 });
 
 export const config = {
     matcher: [
-        // Protects routes except those that match the specified patterns
-        "/((?!.+\\.[\\w]+$|_next|link|privacy|terms).*)", // Allow '/link', '/privacy', '/terms' and their subpaths
-        "/(api|trpc)(.*)", // Protects '/api' and '/trpc' routes
+        "/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
+        "/(api|trpc)(.*)",
     ],
 };
