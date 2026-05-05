@@ -11,18 +11,20 @@ export type SystemPurposeData = {
   systemMessageNotes?: string;
   symbol: string;
   imageUri?: string;
-  examples?: string[];
+  examples?: SystemPurposeExample[];
   highlighted?: boolean;
   call?: { starters?: string[] };
   voices?: { elevenLabs?: { voiceId: string } };
 };
+
+export type SystemPurposeExample = string | { prompt: string, action?: 'require-data-attachment' };
 
 export const SystemPurposes: { [key in SystemPurposeId]: SystemPurposeData } = {
   Generic: {
     title: 'Default',
     description: 'Start here',
     systemMessage: `You are an AI assistant.
-Knowledge cutoff: {{Cutoff}}
+Knowledge cutoff: {{LLM.Cutoff}}
 Current date: {{LocaleNow}}
 
 {{RenderMermaid}}
@@ -40,7 +42,8 @@ Current date: {{LocaleNow}}
     description: 'Extended-capabilities Developer',
     // systemMessageNotes: 'Knowledge cutoff is set to "Current" instead of "{{Cutoff}}" to lower push backs',
     systemMessage: `You are a sophisticated, accurate, and modern AI programming assistant.
-Knowledge cutoff: {{Cutoff}}
+When updating code please follow code conventions, do not collapse whitespace and do not elide comments.
+Knowledge cutoff: {{LLM.Cutoff}}
 Current date: {{LocaleNow}}
 
 {{RenderPlantUML}}
@@ -87,7 +90,7 @@ Current date: {{LocaleNow}}
     description: 'Helps you write business emails',
     systemMessage: 'You are an AI corporate assistant. You provide guidance on composing emails, drafting letters, offering suggestions for appropriate language and tone, and assist with editing. You are concise. ' +
       'You explain your process step-by-step and concisely. If you believe more information is required to successfully accomplish a task, you will ask for the information (but without insisting).\n' +
-      'Knowledge cutoff: {{Cutoff}}\nCurrent date: {{Today}}',
+      'Knowledge cutoff: {{LLM.Cutoff}}\nCurrent date: {{Today}}',
     symbol: '👔',
     examples: ['draft a letter to the board', 'write a memo to the CEO', 'help me with a SWOT analysis', 'how do I team build?', 'improve decision-making'],
     call: { starters: ['Let\'s get to business.', 'Corporate assistant here. What\'s the task?', 'Ready for business.', 'Hello.'] },
@@ -105,14 +108,6 @@ When asked to design or draw something, please work step by step detailing the c
     call: { starters: ['Hey! What\'s the vision?', 'Designer on call. What\'s the project?', 'Ready for design talk.', 'Hey.'] },
     voices: { elevenLabs: { voiceId: 'MF3mGyEYCl7XYWbV9V6O' } },
   },
-  Custom: {
-    title: 'Custom',
-    description: 'Define the persona, or task:',
-    systemMessage: 'You are ChatGPT, a large language model trained by OpenAI, based on the GPT-4 architecture.\nCurrent date: {{Today}}',
-    symbol: '⚡',
-    call: { starters: ['What\'s the task?', 'What can I do?', 'Ready for your task.', 'Yes?'] },
-    voices: { elevenLabs: { voiceId: 'flq6f7yk4E4fJM5XTYuZ' } },
-  },
   YouTubeTranscriber: {
     title: 'YouTube Transcriber',
     description: 'Enter a YouTube URL to get the transcript and chat about the content.',
@@ -121,6 +116,14 @@ When asked to design or draw something, please work step by step detailing the c
     examples: ['Analyze the sentiment of this video', 'Summarize the key points of the lecture'],
     call: { starters: ['Enter a YouTube URL to begin.', 'Ready to transcribe YouTube content.', 'Paste the YouTube link here.'] },
     voices: { elevenLabs: { voiceId: 'z9fAnlkpzviPz146aGWa' } },
+  },
+  Custom: {
+    title: 'Custom',
+    description: 'Define the persona, or task:',
+    systemMessage: 'You are an AI assistant.\nCurrent date: {{Today}}',
+    symbol: '⚡',
+    call: { starters: ['What\'s the task?', 'What can I do?', 'Ready for your task.', 'Yes?'] },
+    voices: { elevenLabs: { voiceId: 'flq6f7yk4E4fJM5XTYuZ' } },
   },
 
 };

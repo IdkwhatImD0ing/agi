@@ -5,6 +5,7 @@ import { Box, Button, Card, IconButton, Input, Typography } from '@mui/joy';
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import YouTubeIcon from '@mui/icons-material/YouTube';
 
+import { extractYoutubeVideoIDFromURL } from '~/modules/youtube/youtube.utils';
 import { useYouTubeTranscript, YTVideoTranscript } from '~/modules/youtube/useYouTubeTranscript';
 
 import { GoodTooltip } from '~/common/components/GoodTooltip';
@@ -13,10 +14,34 @@ import { InlineError } from '~/common/components/InlineError';
 import type { SimplePersonaProvenance } from '../store-app-personas';
 
 
-function extractVideoID(videoURL: string): string | null {
-  const regExp = /^(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:watch\?v=|embed\/)|youtu\.be\/)([^#&?]*).*/;
-  const match = videoURL.match(regExp);
-  return (match && match[1]?.length == 11) ? match[1] : null;
+// configuration
+const TEMP_DISABLE_YOUTUBE_TRANSCRIPT = true;
+
+
+function YouTubeDisabledCard() {
+  return (
+    <Card
+      variant='soft'
+      color='primary'
+      invertedColors
+      sx={{
+        p: 3,
+        textAlign: 'center',
+        border: '1px solid',
+        borderColor: 'primary.solidBg',
+      }}
+    >
+      <Typography level='title-sm' sx={{ mb: 1 }}>
+        Temporarily Disabled
+      </Typography>
+      <Typography level='body-sm' sx={{ mb: 2 }}>
+        YouTube transcript extraction is currently unavailable due to API changes.
+      </Typography>
+      <Typography level='body-xs' color='neutral'>
+        Download transcripts manually and use the &quot;From Text&quot; option instead.
+      </Typography>
+    </Card>
+  );
 }
 
 
@@ -107,7 +132,7 @@ export function FromYouTube(props: {
   const handleCreateFromTranscript = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault(); // stop the form submit
 
-    const videoId = extractVideoID(videoURL) || null;
+    const videoId = extractYoutubeVideoIDFromURL(videoURL) || null;
     if (!videoId)
       setVideoURL('Invalid');
 
@@ -115,6 +140,13 @@ export function FromYouTube(props: {
     setVideoID(videoId);
   };
 
+  if (TEMP_DISABLE_YOUTUBE_TRANSCRIPT)
+    return <>
+      <Typography level='title-md' startDecorator={<YouTubeIcon sx={{ color: '#f00' }} />} sx={{ mb: 3 }}>
+        YouTube -&gt; Persona
+      </Typography>
+      <YouTubeDisabledCard />
+    </>;
 
   return <>
 

@@ -1,20 +1,16 @@
-import { AzureIcon } from '~/common/components/icons/vendors/AzureIcon';
-
 import type { IModelVendor } from '../IModelVendor';
-import type { OpenAIAccessSchema } from '../../server/openai/openai.router';
+import type { OpenAIAccessSchema } from '../../server/openai/openai.access';
 
-import { LLMOptionsOpenAI, ModelVendorOpenAI } from '../openai/openai.vendor';
-import { OpenAILLMOptions } from '../openai/OpenAILLMOptions';
-
-import { AzureSourceSetup } from './AzureSourceSetup';
+import { ModelVendorOpenAI } from '../openai/openai.vendor';
 
 
 // special symbols
 export const isValidAzureApiKey = (apiKey?: string) => !!apiKey && apiKey.length >= 32;
 
-export interface SourceSetupAzure {
+interface DAzureServiceSettings {
   azureEndpoint: string;
   azureKey: string;
+  csf?: boolean;
 }
 
 /** Implementation Notes for the Azure Vendor
@@ -33,31 +29,33 @@ export interface SourceSetupAzure {
  *
  * Work in progress...
  */
-export const ModelVendorAzure: IModelVendor<SourceSetupAzure, OpenAIAccessSchema, LLMOptionsOpenAI> = {
+export const ModelVendorAzure: IModelVendor<DAzureServiceSettings, OpenAIAccessSchema> = {
   id: 'azure',
-  name: 'Azure',
-  rank: 14,
+  name: 'Azure OpenAI',
+  displayRank: 30,
+  displayGroup: 'cloud',
   location: 'cloud',
   instanceLimit: 2,
-  hasBackendCapKey: 'hasLlmAzureOpenAI',
+  hasServerConfigKey: 'hasLlmAzureOpenAI',
 
-  // components
-  Icon: AzureIcon,
-  SourceSetupComponent: AzureSourceSetup,
-  LLMOptionsComponent: OpenAILLMOptions,
+  /// client-side-fetch ///
+  csfAvailable: _csfAzureAvailable,
 
   // functions
   getTransportAccess: (partialSetup): OpenAIAccessSchema => ({
     dialect: 'azure',
+    clientSideFetch: _csfAzureAvailable(partialSetup) && !!partialSetup?.csf,
     oaiKey: partialSetup?.azureKey || '',
     oaiOrg: '',
     oaiHost: partialSetup?.azureEndpoint || '',
     heliKey: '',
-    moderationCheck: false,
   }),
 
   // OpenAI transport ('azure' dialect in 'access')
   rpcUpdateModelsOrThrow: ModelVendorOpenAI.rpcUpdateModelsOrThrow,
-  rpcChatGenerateOrThrow: ModelVendorOpenAI.rpcChatGenerateOrThrow,
-  streamingChatGenerateOrThrow: ModelVendorOpenAI.streamingChatGenerateOrThrow,
+
 };
+
+function _csfAzureAvailable(s?: Partial<DAzureServiceSettings>) {
+  return !!(s?.azureKey && s?.azureEndpoint);
+}

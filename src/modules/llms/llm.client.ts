@@ -1,178 +1,230 @@
-import { sendGAEvent } from '@next/third-parties/google';
+import { hasGoogleAnalytics, sendGAEvent } from '~/common/components/3rdparty/GoogleAnalytics';
 
-import { hasGoogleAnalytics } from '~/common/components/GoogleAnalytics';
+import type { DModelsService, DModelsServiceId } from '~/common/stores/llms/llms.service.types';
+import { DLLM, DLLMId, DModelInterfaceV1, LLM_IF_HOTFIX_NoTemperature, LLM_IF_OAI_Chat, LLM_IF_OAI_Fn } from '~/common/stores/llms/llms.types';
+import { applyModelParameterSpecsInitialValues, DModelParameterSpecAny, LLMImplicitParametersRuntimeFallback } from '~/common/stores/llms/llms.parameters';
+import { isLLMChatPricingFree } from '~/common/stores/llms/llms.pricing';
+import { llmsStoreActions } from '~/common/stores/llms/store-llms';
 
-import type { GenerateContextNameSchema, ModelDescriptionSchema, StreamingContextNameSchema } from './server/llm.server.types';
-import type { OpenAIWire } from './server/openai/openai.wiretypes';
-import type { StreamingClientUpdate } from './vendors/unifiedStreamingClient';
-import { DLLM, DLLMId, DModelSource, DModelSourceId, LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, useModelsStore } from './store-llms';
-import { FALLBACK_LLM_TEMPERATURE } from './vendors/openai/openai.vendor';
-import { findAccessForSourceOrThrow, findVendorForLlmOrThrow } from './vendors/vendors.registry';
+import type { ModelDescriptionSchema } from './server/llm.server.types';
+import { findServiceAccessOrThrow } from './vendors/vendor.helpers';
 
 
-// LLM Client Types
-// NOTE: Model List types in '../server/llm.server.types';
+// configuration
 
-export interface VChatMessageIn {
-  role: 'assistant' | 'system' | 'user'; // | 'function';
-  content: string;
-  //name?: string; // when role: 'function'
-}
+/**
+ * DO NOT EXPORT TO THE SERVER, as the server knows already but we don't want to cross bundles.
+ * When this prefix is used, then the variant ID will not be prefixed with a dash.
+ */
+export const LLMS_VARIANT_SEPARATOR = '::' as const;
 
-export type VChatFunctionIn = OpenAIWire.ChatCompletion.RequestFunctionDef;
+// Cap for the *initial* llmResponseTokens default to avoid runaway defaults on huge-context models.
+// The model's maxOutputTokens is unchanged (vendor-reported cap remains true); users can still raise
+// llmResponseTokens via the slider up to maxOutputTokens. On reset, this capped initial is used.
+const _INITIAL_RESPONSE_TOKENS_CAP = 128_000;
 
-export type VChatStreamContextName = StreamingContextNameSchema;
-export type VChatGenerateContextName = GenerateContextNameSchema;
-export type VChatContextRef = string;
 
-export interface VChatMessageOut {
-  role: 'assistant' | 'system' | 'user';
-  content: string;
-  finish_reason: 'stop' | 'length' | null;
-}
-
-export interface VChatMessageOrFunctionCallOut extends VChatMessageOut {
-  function_name: string;
-  function_arguments: object | null;
+function _clientIdWithVariant(id: string, idVariant?: string): string {
+  return !idVariant ? id
+    : idVariant.startsWith(LLMS_VARIANT_SEPARATOR) ? `${id}${idVariant}`
+      : `${id}-${idVariant}`;
 }
 
 
-// LLM Client Functions
+// LLM Model Updates Client Functions
 
-export async function llmsUpdateModelsForSourceOrThrow(sourceId: DModelSourceId, keepUserEdits: boolean): Promise<{ models: ModelDescriptionSchema[] }> {
+export async function llmsUpdateModelsForServiceOrThrow(serviceId: DModelsServiceId, keepUserEdits: true): Promise<{ models: ModelDescriptionSchema[] }> {
 
   // get the access, assuming there's no client config and the server will do all
-  const { source, vendor, transportAccess } = findAccessForSourceOrThrow(sourceId);
+  const { service, vendor, transportAccess } = findServiceAccessOrThrow(serviceId);
+
+
+  // [CSF] Pre-load client-side executor if needed
+  let clientSideListModels: typeof import('./llm.client.direct-listModels').clientSideListModels | undefined;
+  if (!!transportAccess && typeof transportAccess === 'object' && (transportAccess as any).clientSideFetch)
+    try {
+      clientSideListModels = (await import('./llm.client.direct-listModels')).clientSideListModels;
+    } catch (error) {
+      throw new Error(`Direct model listing issue: ${(error as any)?.message || 'unknown loading error'}`, { cause: error });
+    }
 
   // fetch models
-  const data = await vendor.rpcUpdateModelsOrThrow(transportAccess);
+  let models: ModelDescriptionSchema[];
+
+  // LLMs [CSM] Direct Execution
+  if (clientSideListModels)
+    models = await clientSideListModels(transportAccess);
+
+  // LLMs tRPC Execution
+  else
+    models = (await vendor.rpcUpdateModelsOrThrow(transportAccess)).models;
+
 
   // update the global models store
-  useModelsStore.getState().setLLMs(
-    data.models.map(model => modelDescriptionToDLLMOpenAIOptions(model, source)),
-    source.id,
-    true,
+  const factoryLLMs: ReadonlyArray<DLLM> = models.map(
+    (model: ModelDescriptionSchema) => _createDLLMFromModelDescription(model, service),
+  );
+  llmsStoreActions().setServiceLLMs(
+    service.id,
+    factoryLLMs,
     keepUserEdits,
+    false,
   );
 
   // figure out which vendors are actually used and useful
   hasGoogleAnalytics && sendGAEvent('event', 'app_models_updated', {
-    app_models_source_id: source.id,
-    app_models_source_label: source.label,
-    app_models_updated_count: data.models.length || 0,
+    app_models_source_id: service.id,
+    app_models_source_label: service.label,
+    app_models_updated_count: models.length || 0,
     app_models_vendor_id: vendor.id,
     app_models_vendor_label: vendor.name,
   });
 
   // return the fetched models
-  return data;
+  return { models };
 }
 
-function modelDescriptionToDLLMOpenAIOptions<TSourceSetup, TLLMOptions>(model: ModelDescriptionSchema, source: DModelSource<TSourceSetup>): DLLM<TSourceSetup, TLLMOptions> {
+const _fallbackInterfaces = [LLM_IF_OAI_Chat, LLM_IF_OAI_Fn];
 
-  // null means unknown contenxt/output tokens
-  const contextTokens = model.contextWindow || null;
-  const maxOutputTokens = model.maxCompletionTokens || (contextTokens ? Math.round(contextTokens / 2) : null);
-  const llmResponseTokensRatio = model.maxCompletionTokens ? 1 : 1 / 4;
-  const llmResponseTokens = maxOutputTokens ? Math.round(maxOutputTokens * llmResponseTokensRatio) : null;
+function _createDLLMFromModelDescription(d: ModelDescriptionSchema, service: DModelsService): DLLM {
 
-  return {
-    id: `${source.id}-${model.id}`,
+  // null means unknown context/output tokens
+  const contextTokens = d.contextWindow || null;
+  const maxOutputTokens = d.maxCompletionTokens || (contextTokens ? Math.round(contextTokens / 2) : null); // fallback to half context window
 
-    // editable properties
-    label: model.label,
-    created: model.created || 0,
-    updated: model.updated || 0,
-    description: model.description,
-    hidden: !!model.hidden,
-    // isEdited: false, // NOTE: this is set by the store on user edits
+  // initial (user overridable) response tokens setting: equal to the max, if the max is given, or to 1/8th of the context window (when max is set to 1/2 of context); clamped to cap
+  const llmResponseTokens = !maxOutputTokens ? null
+    : Math.min(d.maxCompletionTokens ?? Math.round(maxOutputTokens / 4), _INITIAL_RESPONSE_TOKENS_CAP);
+
+
+  // DLLM is a fundamental type in our application
+  const dllm: DLLM = {
+
+    // this id is Big-AGI specific, not the vendor's
+    id: `${service.id}-${_clientIdWithVariant(d.id, d.idVariant)}`,
+
+    // factory properties
+    label: d.label,
+    created: d.created || 0,
+    updated: d.updated || 0,
+    description: d.description,
+    hidden: !!d.hidden,
 
     // hard properties
     contextTokens,
     maxOutputTokens,
-    trainingDataCutoff: model.trainingDataCutoff,
-    interfaces: model.interfaces?.length ? model.interfaces : [LLM_IF_OAI_Chat],
-    // inputTypes: ...
-    benchmark: model.benchmark,
-    pricing: model.pricing,
+    interfaces: d.interfaces?.length ? d.interfaces as DModelInterfaceV1[] : _fallbackInterfaces,
+    benchmark: d.benchmark,
+    // pricing?: ..., // set below, since it needs some adaptation
 
-    // derived properties
-    tmpIsFree: model.pricing?.chatIn === 0 && model.pricing?.chatOut === 0,
-    tmpIsVision: model.interfaces?.includes(LLM_IF_OAI_Chat) === true,
-
-    sId: source.id,
-    _source: source,
-
-    options: {
-      llmRef: model.id,
-      // @ts-ignore FIXME: large assumption that this is LLMOptionsOpenAI object
-      llmTemperature: FALLBACK_LLM_TEMPERATURE,
-      llmResponseTokens,
+    // parameters system (spec and initial values)
+    parameterSpecs: d.parameterSpecs?.length
+      ? d.parameterSpecs as DModelParameterSpecAny[] // NOTE: our force cast, assume the server (simple zod type) sent valid specs to the client (TS discriminated type)
+      : [],
+    initialParameters: {
+      llmRef: d.id, // CONST - this is the vendor model id
+      llmResponseTokens: llmResponseTokens, // number | null
+      llmTemperature: // number | null
+        d.interfaces.includes(LLM_IF_HOTFIX_NoTemperature) ? null
+          : d.initialTemperature !== undefined ? d.initialTemperature
+            : LLMImplicitParametersRuntimeFallback.llmTemperature,
     },
+
+    // references
+    sId: service.id,
+    vId: service.vId,
+
+    // user edited properties: not set
+    // userLabel: undefined,
+    // userHidden: undefined
+    // userStarred: undefined,
+    // userContextTokens: undefined,
+    // userMaxOutputTokens: undefined,
+    // userPricing: undefined,
+    // userParameters: undefined,
+
+    // clone metadata
+    // isUserClone: false,
+    // cloneSourceId: undefined,
+  };
+
+  // set the pricing
+  if (d.chatPrice && typeof d.chatPrice === 'object')
+    dllm.pricing = {
+      chat: {
+        ...d.chatPrice,
+        // compute the free status
+        _isFree: isLLMChatPricingFree(d.chatPrice),
+      },
+    };
+
+  // set other params from spec's initialValues
+  if (dllm.parameterSpecs?.length)
+    applyModelParameterSpecsInitialValues(dllm.initialParameters, dllm.parameterSpecs, false);
+
+  return dllm;
+}
+
+
+// LLM Clone Creation
+
+/**
+ * Creates a clone DLLM object from a source LLM.
+ * The clone has its own ID and label but inherits all settings from the source.
+ *
+ * @param sourceLlm - The source LLM to clone
+ * @param cloneLabel - Display label for the clone
+ * @param cloneVariant - Variant suffix for the clone ID (will be appended as `-{variant}`)
+ * @returns The new DLLM object ready to be added to the store
+ */
+export function createDLLMUserClone(sourceLlm: DLLM, cloneLabel: string, cloneVariant: string): DLLM {
+  const cloneId = getDLLMCloneId(sourceLlm.id, cloneVariant);
+
+  return {
+    ...sourceLlm,
+    id: cloneId,
+    label: cloneLabel,
+
+    // -- Inherited Factory Properties
+    // created
+    // updated
+    // description
+    // hidden
+
+    // -- Inherited Hard Properties
+    // contextTokens
+    // maxOutputTokens
+    // interfaces
+    // benchmark
+    // pricing
+
+    // -- Inherited Parameters
+    // parameterSpecs
+    // initialParameters
+
+    // references(!)
+    // sId
+    // vId
+
+    // copy user customizations as the clone's own
+    userLabel: undefined, // use the cloneLabel as label directly
+    userHidden: sourceLlm.userHidden,
+    userStarred: false, // don't auto-star clones
+    userContextTokens: sourceLlm.userContextTokens,
+    userMaxOutputTokens: sourceLlm.userMaxOutputTokens,
+    userPricing: sourceLlm.userPricing ? { ...sourceLlm.userPricing } : undefined,
+    userParameters: sourceLlm.userParameters ? { ...sourceLlm.userParameters } : undefined,
+
+    // clone metadata
+    isUserClone: true,
+    cloneSourceId: sourceLlm.id,
   };
 }
 
-
-export async function llmChatGenerateOrThrow<TSourceSetup = unknown, TAccess = unknown, TLLMOptions = unknown>(
-  llmId: DLLMId,
-  messages: VChatMessageIn[],
-  contextName: VChatGenerateContextName,
-  contextRef: VChatContextRef | null,
-  functions: VChatFunctionIn[] | null,
-  forceFunctionName: string | null,
-  maxTokens?: number,
-): Promise<VChatMessageOut | VChatMessageOrFunctionCallOut> {
-
-  // id to DLLM and vendor
-  const { llm, vendor } = findVendorForLlmOrThrow<TSourceSetup, TAccess, TLLMOptions>(llmId);
-
-  // if the model does not support function calling and we're trying to force a function, throw
-  if (forceFunctionName && !llm.interfaces.includes(LLM_IF_OAI_Fn))
-    throw new Error(`Model ${llmId} does not support function calling`);
-
-  // FIXME: relax the forced cast
-  const options = llm.options as TLLMOptions;
-
-  // get the access
-  const partialSourceSetup = llm._source.setup;
-  const access = vendor.getTransportAccess(partialSourceSetup);
-
-  // get any vendor-specific rate limit delay
-  const delay = vendor.getRateLimitDelay?.(llm, partialSourceSetup) ?? 0;
-  if (delay > 0)
-    await new Promise(resolve => setTimeout(resolve, delay));
-
-  // execute via the vendor
-  return await vendor.rpcChatGenerateOrThrow(access, options, messages, contextName, contextRef, functions, forceFunctionName, maxTokens);
-}
-
-
-export async function llmStreamingChatGenerate<TSourceSetup = unknown, TAccess = unknown, TLLMOptions = unknown>(
-  llmId: DLLMId,
-  messages: VChatMessageIn[],
-  contextName: VChatStreamContextName,
-  contextRef: VChatContextRef,
-  functions: VChatFunctionIn[] | null,
-  forceFunctionName: string | null,
-  abortSignal: AbortSignal,
-  onUpdate: (update: StreamingClientUpdate, done: boolean) => void,
-): Promise<void> {
-
-  // id to DLLM and vendor
-  const { llm, vendor } = findVendorForLlmOrThrow<TSourceSetup, TAccess, TLLMOptions>(llmId);
-
-  // FIXME: relax the forced cast
-  const llmOptions = llm.options as TLLMOptions;
-
-  // get the access
-  const partialSourceSetup = llm._source.setup;
-  const access = vendor.getTransportAccess(partialSourceSetup); // as ChatStreamInputSchema['access'];
-
-  // get any vendor-specific rate limit delay
-  const delay = vendor.getRateLimitDelay?.(llm, partialSourceSetup) ?? 0;
-  if (delay > 0)
-    await new Promise(resolve => setTimeout(resolve, delay));
-
-  // execute via the vendor
-  return await vendor.streamingChatGenerateOrThrow(access, llmId, llmOptions, messages, contextName, contextRef, functions, forceFunctionName, abortSignal, onUpdate);
+/**
+ * Generates the clone ID that would be created for a given source and variant.
+ * Useful for checking uniqueness before creating a clone.
+ */
+export function getDLLMCloneId(sourceId: DLLMId, cloneVariant: string): DLLMId {
+  return `${sourceId}::${cloneVariant}` as DLLMId;
 }

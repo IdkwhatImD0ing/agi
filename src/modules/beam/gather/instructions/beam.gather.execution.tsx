@@ -1,14 +1,15 @@
 import * as React from 'react';
 import { Typography } from '@mui/joy';
 
-import type { DLLMId } from '~/modules/llms/store-llms';
-
-import { createDMessage, type DMessage } from '~/common/state/store-chats';
+import type { DLLMId } from '~/common/stores/llms/llms.types';
+import { abortWithReason } from '~/common/util/errorUtils';
+import { createDMessageEmpty, DMessage } from '~/common/stores/chat/chat.message';
+import { createPlaceholderVoidFragment } from '~/common/stores/chat/chat.fragments';
 
 import type { BFusion, FusionUpdateOrFn } from '../beam.gather';
-import { ChatGenerateInstruction, executeChatGenerate } from './ChatGenerateInstruction';
+import { executeGatherInstruction, GatherInstruction } from './GatherInstruction';
 import { GATHER_PLACEHOLDER } from '../../beam.config';
-import { executeUserInputChecklist, UserInputChecklistInstruction } from './UserInputChecklistInstruction';
+import { executeUserInputChecklistInstruction, UserInputChecklistInstruction } from './UserInputChecklistInstruction';
 
 
 /// [Asynchronous Instruction Framework] ///
@@ -32,7 +33,7 @@ export interface ExecutionInputState {
   readonly intermediateDMessage: DMessage;
 }
 
-export type Instruction = ChatGenerateInstruction | UserInputChecklistInstruction;
+export type Instruction = GatherInstruction | UserInputChecklistInstruction;
 
 
 export function gatherStartFusion(
@@ -44,7 +45,7 @@ export function gatherStartFusion(
 
   // abort any current fusion
   const { instructions } = initialFusion;
-  initialFusion.fusingAbortController?.abort();
+  abortWithReason(initialFusion.fusingAbortController, 'Merge Stopped');
 
   // validate preconditions
   const onError = (errorText: string) => onUpdateBFusion({
@@ -57,7 +58,7 @@ export function gatherStartFusion(
   if (chatMessages.length < 1)
     return onError('No conversation history available');
   if (rayMessages.length <= 1)
-    return onError('No responses available');
+    return onError('Needs two Beams at least');
   if (!initialFusion.llmId)
     return onError('No Merge model selected');
 
@@ -74,7 +75,7 @@ export function gatherStartFusion(
     updateProgressComponent: (component: React.ReactNode) => onUpdateBFusion({ fusingProgressComponent: component }),
     updateInstructionComponent: (component: React.ReactNode) => onUpdateBFusion({ fusingInstructionComponent: component }),
     // output1 -> input2
-    intermediateDMessage: createDMessage('assistant', GATHER_PLACEHOLDER),
+    intermediateDMessage: createDMessageEmpty('assistant'), // [state] assistant:Fusion_pending
   };
 
 
@@ -93,10 +94,12 @@ export function gatherStartFusion(
 
 
   // Execute the instructions in sequence
-  let promiseChain = Promise.resolve<string>('');
+  type PipedValueType = string;
+  const chainedInitialValue: PipedValueType = '';
+  let promiseChain: Promise<PipedValueType> = Promise.resolve(chainedInitialValue);
   for (const instruction of instructions) {
-    promiseChain = promiseChain.then((previousResult: string) => {
-      // You can use previousResult here, if needed
+    promiseChain = promiseChain.then((precedingValue: PipedValueType) => {
+      // You can use chainedValue here, if needed
       inputState.updateProgressComponent(
         <Typography
           level='body-sm'
@@ -106,11 +109,18 @@ export function gatherStartFusion(
           {instruction.label} ...
         </Typography>,
       );
+
+      // reset the intermediate message
+      inputState.intermediateDMessage.fragments = [createPlaceholderVoidFragment(GATHER_PLACEHOLDER)];
+      inputState.intermediateDMessage.pendingIncomplete = true;
+      inputState.intermediateDMessage.updated = null;
+
+      // return the promise from the instruction
       switch (instruction.type) {
-        case 'chat-generate':
-          return executeChatGenerate(instruction, inputState, previousResult);
+        case 'gather':
+          return executeGatherInstruction(instruction, inputState, precedingValue);
         case 'user-input-checklist':
-          return executeUserInputChecklist(instruction, inputState, previousResult);
+          return executeUserInputChecklistInstruction(instruction, inputState, precedingValue);
         default:
           return Promise.reject(new Error('Unsupported Merge instruction'));
       }
@@ -140,6 +150,7 @@ export function gatherStartFusion(
       onUpdateBFusion({
         stage: 'error',
         errorText: 'Issue: ' + (error?.message || error?.toString() || 'Unknown error'),
+        fusingProgressComponent: undefined, // stops the spinner
       });
     })
     .finally(() => onUpdateBFusion({
@@ -152,10 +163,10 @@ export function gatherStartFusion(
 
 
 export function gatherStopFusion(fusion: BFusion): BFusion {
-  fusion.fusingAbortController?.abort();
+  abortWithReason(fusion.fusingAbortController, 'Merge Stopped');
   return {
     ...fusion,
-    ...(fusion.stage === 'fusing' ? { status: 'stopped' /* speculative as the abort shall do the same */ } : {}),
+    ...(fusion.stage === 'fusing' ? { stage: 'stopped' /* optimistic as the abort shall do the same */ } : {}),
     fusingAbortController: undefined,
   };
 }

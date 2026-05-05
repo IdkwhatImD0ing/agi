@@ -1,7 +1,8 @@
 import * as React from 'react';
 
 import { Box, Container, ListDivider, Typography } from '@mui/joy';
-import { usePluggableOptimaLayout } from '~/common/layout/optima/useOptimaLayout';
+
+import { OptimaDrawerIn } from '~/common/layout/optima/portals/OptimaPortalsIn';
 
 import { Creator } from './creator/Creator';
 import { CreatorDrawer } from './creator/CreatorDrawer';
@@ -13,22 +14,16 @@ export function AppPersonas() {
   // state
   const [selectedSimplePersonaId, setSelectedSimplePersonaId] = React.useState<string | null>(null);
 
+  return <>
 
-  // pluggable UI
-
-  const drawerContent = React.useMemo(() => {
-    return (
+    {/* -> Drawer */}
+    <OptimaDrawerIn>
       <CreatorDrawer
         selectedSimplePersonaId={selectedSimplePersonaId}
         setSelectedSimplePersonaId={setSelectedSimplePersonaId}
       />
-    );
-  }, [selectedSimplePersonaId]);
+    </OptimaDrawerIn>
 
-  usePluggableOptimaLayout(drawerContent, null, null, 'AppPersonas');
-
-
-  return (
     <Box sx={{
       flexGrow: 1,
       overflowY: 'auto',
@@ -50,5 +45,5 @@ export function AppPersonas() {
       </Container>
 
     </Box>
-  );
+  </>;
 }

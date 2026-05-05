@@ -1,21 +1,20 @@
-import { OpenRouterIcon } from '~/common/components/icons/vendors/OpenRouterIcon';
-
 import type { IModelVendor } from '../IModelVendor';
-import type { OpenAIAccessSchema } from '../../server/openai/openai.router';
+import type { OpenAIAccessSchema } from '../../server/openai/openai.access';
 
-import { LLMOptionsOpenAI, ModelVendorOpenAI } from '../openai/openai.vendor';
-import { OpenAILLMOptions } from '../openai/OpenAILLMOptions';
+import { isLLMChatFree_cached } from '~/common/stores/llms/llms.pricing';
 
-import { OpenRouterSourceSetup } from './OpenRouterSourceSetup';
+import { ModelVendorOpenAI } from '../openai/openai.vendor';
 
 
 // special symbols
 export const isValidOpenRouterKey = (apiKey?: string) => !!apiKey && apiKey.startsWith('sk-or-') && apiKey.length > 40;
 
 // use OpenAI-compatible host and key
-export interface SourceSetupOpenRouter {
+export interface DOpenRouterServiceSettings {
   oaiKey: string;
   oaiHost: string;
+  csf?: boolean;
+  requireParameters?: boolean;
 }
 
 /**
@@ -29,57 +28,60 @@ export interface SourceSetupOpenRouter {
  *  [x] decide whether to do UI work to improve the appearance - prioritized models
  *  [x] works!
  */
-export const ModelVendorOpenRouter: IModelVendor<SourceSetupOpenRouter, OpenAIAccessSchema, LLMOptionsOpenAI> = {
+export const ModelVendorOpenRouter: IModelVendor<DOpenRouterServiceSettings, OpenAIAccessSchema> = {
   id: 'openrouter',
   name: 'OpenRouter',
-  rank: 12,
+  displayRank: 40,
+  displayGroup: 'popular',
   location: 'cloud',
   instanceLimit: 1,
   hasFreeModels: true,
-  hasBackendCapKey: 'hasLlmOpenRouter',
+  hasServerConfigKey: 'hasLlmOpenRouter',
 
-  // components
-  Icon: OpenRouterIcon,
-  SourceSetupComponent: OpenRouterSourceSetup,
-  LLMOptionsComponent: OpenAILLMOptions,
+  /// client-side-fetch ///
+  csfAvailable: _csfOpenRouterAvailable,
 
   // functions
-  initializeSetup: (): SourceSetupOpenRouter => ({
+  initializeSetup: (): DOpenRouterServiceSettings => ({
     oaiHost: 'https://openrouter.ai/api',
     oaiKey: '',
   }),
   getTransportAccess: (partialSetup): OpenAIAccessSchema => ({
     dialect: 'openrouter',
+    clientSideFetch: _csfOpenRouterAvailable(partialSetup) && !!partialSetup?.csf,
     oaiKey: partialSetup?.oaiKey || '',
     oaiOrg: '',
     oaiHost: partialSetup?.oaiHost || '',
     heliKey: '',
-    moderationCheck: false,
+    ...(partialSetup?.requireParameters ? { orRequireParameters: true } : {}),
   }),
 
   // there is delay for OpenRouter Free API calls
-  getRateLimitDelay: (llm) => {
+  rateLimitChatGenerate: async (llm) => {
     const now = Date.now();
     const elapsed = now - nextGenerationTs;
-    const wait = llm.tmpIsFree
+    const wait = isLLMChatFree_cached(llm)
       ? 5000 + 100 /* 5 seconds for free call, plus some safety margin */
       : 100;
 
     if (elapsed < wait) {
       const delay = wait - elapsed;
       nextGenerationTs = now + delay;
-      return delay;
+      await new Promise(resolve => setTimeout(resolve, delay));
     } else {
       nextGenerationTs = now;
-      return 0;
     }
   },
 
+
   // OpenAI transport ('openrouter' dialect in 'access')
   rpcUpdateModelsOrThrow: ModelVendorOpenAI.rpcUpdateModelsOrThrow,
-  rpcChatGenerateOrThrow: ModelVendorOpenAI.rpcChatGenerateOrThrow,
-  streamingChatGenerateOrThrow: ModelVendorOpenAI.streamingChatGenerateOrThrow,
+
 };
 
 // rate limit timestamp
 let nextGenerationTs = 0;
+
+function _csfOpenRouterAvailable(s?: Partial<DOpenRouterServiceSettings>) {
+  return !!s?.oaiKey;
+}

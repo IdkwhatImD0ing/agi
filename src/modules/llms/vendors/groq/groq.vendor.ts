@@ -1,30 +1,25 @@
-import { GroqIcon } from '~/common/components/icons/vendors/GroqIcon';
-
 import type { IModelVendor } from '../IModelVendor';
-import type { OpenAIAccessSchema } from '../../server/openai/openai.router';
+import type { OpenAIAccessSchema } from '../../server/openai/openai.access';
 
-import { LLMOptionsOpenAI, ModelVendorOpenAI } from '../openai/openai.vendor';
-import { OpenAILLMOptions } from '../openai/OpenAILLMOptions';
-
-import { GroqSourceSetup } from './GroqSourceSetup';
+import { ModelVendorOpenAI } from '../openai/openai.vendor';
 
 
-export interface SourceSetupGroq {
+interface DGroqServiceSettings {
   groqKey: string;
+  csf?: boolean;
 }
 
-export const ModelVendorGroq: IModelVendor<SourceSetupGroq, OpenAIAccessSchema, LLMOptionsOpenAI> = {
+export const ModelVendorGroq: IModelVendor<DGroqServiceSettings, OpenAIAccessSchema> = {
   id: 'groq',
   name: 'Groq',
-  rank: 18,
+  displayRank: 32,
+  displayGroup: 'cloud',
   location: 'cloud',
   instanceLimit: 1,
-  hasBackendCapKey: 'hasLlmGroq',
+  hasServerConfigKey: 'hasLlmGroq',
 
-  // components
-  Icon: GroqIcon,
-  SourceSetupComponent: GroqSourceSetup,
-  LLMOptionsComponent: OpenAILLMOptions,
+  /// client-side-fetch ///
+  csfAvailable: _csfGroqAvailable,
 
   // functions
   initializeSetup: () => ({
@@ -35,15 +30,18 @@ export const ModelVendorGroq: IModelVendor<SourceSetupGroq, OpenAIAccessSchema, 
   },
   getTransportAccess: (partialSetup) => ({
     dialect: 'groq',
+    clientSideFetch: _csfGroqAvailable(partialSetup) && !!partialSetup?.csf,
     oaiKey: partialSetup?.groqKey || '',
     oaiOrg: '',
     oaiHost: '',
     heliKey: '',
-    moderationCheck: false,
   }),
 
   // OpenAI transport ('Groq' dialect in 'access')
   rpcUpdateModelsOrThrow: ModelVendorOpenAI.rpcUpdateModelsOrThrow,
-  rpcChatGenerateOrThrow: ModelVendorOpenAI.rpcChatGenerateOrThrow,
-  streamingChatGenerateOrThrow: ModelVendorOpenAI.streamingChatGenerateOrThrow,
+
 };
+
+function _csfGroqAvailable(s?: Partial<DGroqServiceSettings>) {
+  return !!s?.groqKey;
+}

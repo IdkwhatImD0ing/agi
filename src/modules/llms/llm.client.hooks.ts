@@ -1,19 +1,20 @@
 import type { TRPCClientErrorBase } from '@trpc/client';
 import { useQuery } from '@tanstack/react-query';
 
+import type { DModelsService } from '~/common/stores/llms/llms.service.types';
+
 import type { ModelDescriptionSchema } from './server/llm.server.types';
-import type { DModelSource } from './store-llms';
-import { llmsUpdateModelsForSourceOrThrow } from './llm.client';
+import { llmsUpdateModelsForServiceOrThrow } from './llm.client';
 
 
 /**
  * Hook that fetches the list of models from the vendor and updates the store,
  * while returning the fetch state.
  */
-export function useLlmUpdateModels<TSourceSetup>(
+export function useLlmUpdateModels<TServiceSettings extends object>(
   enabled: boolean,
-  source: DModelSource<TSourceSetup>,
-  keepUserEdits?: boolean,
+  service: DModelsService<TServiceSettings> | null,
+  // discardUserEdits?: boolean,
 ): {
   isFetching: boolean,
   refetch: () => void,
@@ -21,11 +22,13 @@ export function useLlmUpdateModels<TSourceSetup>(
   error: TRPCClientErrorBase<any> | null
 } {
   return useQuery<{ models: ModelDescriptionSchema[] }, TRPCClientErrorBase<any> | null>({
-    enabled: enabled && !!source,
-    queryKey: ['list-models', source.id],
-    queryFn: async () => await llmsUpdateModelsForSourceOrThrow(source.id, keepUserEdits === true),
+    enabled: enabled && !!service,
+    queryKey: ['list-models', service?.id || 'missing-service'],
+    queryFn: async () => {
+      if (!service)
+        throw new Error('No service provided to fetch models for');
+      return await llmsUpdateModelsForServiceOrThrow(service.id, true /*!discardUserEdits*/);
+    },
     staleTime: Infinity,
   });
 }
-
-

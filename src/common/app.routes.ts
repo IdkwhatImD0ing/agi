@@ -3,13 +3,15 @@
 //
 // We will centralize them here, for UI and routing purposes.
 //
+// noinspection Annotator
 
 import Router, { useRouter } from 'next/router';
 
 import type { AppCallIntent } from '../apps/call/AppCall';
 import type { AppChatIntent } from '../apps/chat/AppChat';
 
-import type { DConversationId } from '~/common/state/store-chats';
+import type { DConversationId } from '~/common/stores/chat/chat.conversation';
+
 import { isBrowser } from './util/pwaUtils';
 
 
@@ -77,6 +79,7 @@ export async function launchAppChat(conversationId?: DConversationId) {
       pathname: ROUTE_APP_CHAT,
       query: !conversationId ? undefined : {
         initialConversationId: conversationId,
+        // newChat?: 'voiceInput',
       } satisfies AppChatIntent,
     },
     ROUTE_APP_CHAT,
@@ -96,3 +99,18 @@ export function launchAppCall(conversationId: string, personaId: string) {
     // ROUTE_APP_CALL,
   ).then();
 }
+
+
+/// Query Params utilities
+
+export function removeQueryParam(key: string): Promise<boolean> {
+  const newQuery = { ...Router.query };
+  delete newQuery[key];
+  return Router.replace({ pathname: Router.pathname, query: newQuery }, undefined, { shallow: true });
+}
+
+/*export function removeQueryParams(keysToRemove: string[]): Promise<boolean> {
+  const newQuery = { ...Router.query };
+  keysToRemove.forEach(key => delete newQuery[key]);
+  return Router.replace({ pathname: Router.pathname, query: newQuery }, undefined, { shallow: true });
+}*/

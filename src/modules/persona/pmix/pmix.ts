@@ -1,102 +1,95 @@
-import { DLLMId, findLLMOrThrow } from '~/modules/llms/store-llms';
+import { autoFollowUpUIMixin } from '~/modules/aifn/auto-chat-follow-ups/autoChatFollowUps';
 
-import { browserLangOrUS } from '~/common/util/pwaUtils';
+import type { DLLMId } from '~/common/stores/llms/llms.types';
+import { BrowserLang, Is } from '~/common/util/pwaUtils';
 
-/*type Variables =
-  | '{{Today}}'
-  | '{{Cutoff}}'
-  | '{{PreferTables}}'
-  | '{{RenderMermaid}}'
-  | '{{RenderPlantUML}}'
-  | '{{RenderSVG}}'
-  | '{{InputImage0}}'
-  | '{{ToolBrowser0}}';
+import { getChatAutoAI } from '../../../apps/chat/store-app-chat';
 
-type VariableResolverContext = {
-  assistantLlmId: DLLMId;
-};
+import { PPromptMixerContext, PromptVariableRegistry } from './pmix.parameters';
 
-const variableResolvers: { [key in Variables]: (context: VariableResolverContext) => string } = {
-  '{{Today}}': () => {
-    const today = new Date();
-    return today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
-  },
-  '{{Cutoff}}': (context) => {
-    return getKnowledgeMapCutoff(context.assistantLlmId) || '';
-  },
 
-  '{{PreferTables}}': () => 'Data presentation: prefer tables (auto-columns)',
-  '{{RenderMermaid}}': () => 'Mermaid rendering: Enabled',
-  '{{RenderPlantUML}}': () => 'PlantUML rendering: Enabled',
-  '{{RenderSVG}}': () => 'SVG rendering: Enabled',
+// configuration
+const REMOVE_ALL_LINE_IF_MISSING_LLM = true; // remove all lines if LLM is missing
 
-  '{{InputImage0}}': () => 'Image input capabilities: Disabled',
 
-  '{{ToolBrowser0}}': () => 'Web browsing capabilities: Disabled',
-};*/
+export function replacePromptVariables(template: string, context: PPromptMixerContext): string {
+  let mixed = template;
+
+  // auto-append Auto-Suggest features if enabled
+  if (context.fixupAutoSuggestHTMLUI)
+    mixed += (mixed.endsWith('\n') ? '' : '\n') + autoFollowUpUIMixin;
+  // if (context.autoSuggestDiagrams)
+  //   mixed += (mixed.endsWith('\n') ? '' : '\n') + '{{FixupAutoSuggestDiagrams}}';
+
+  // process each variable in the registry
+  for (const [variable, definition] of Object.entries(PromptVariableRegistry)) {
+
+    // validate presence of dependencies
+    if (definition.dependencies?.assistantLlmId && !context.assistantLlmId) {
+      if (REMOVE_ALL_LINE_IF_MISSING_LLM)
+        mixed = mixed.replaceAll(new RegExp(`.*${variable}.*\n?`, 'g'), '');
+      else
+        console.log(`[DEV] replacePromptVariables: skipping ${variable} due to missing LLM ID`);
+      continue;
+    }
+    if (definition.dependencies?.lowHourPrecision && context.lowHourPrecision === undefined) {
+      if (REMOVE_ALL_LINE_IF_MISSING_LLM)
+        mixed = mixed.replaceAll(new RegExp(`.*${variable}.*\n?`, 'g'), '');
+      else
+        console.log(`[DEV] replacePromptVariables: skipping ${variable} due to missing lowHourPrecision`);
+      continue;
+    }
+
+    // get the replacement text or the regex replacement pattern
+    const replacementOrNull = definition.replace(context);
+
+    // handle whole-line removal
+    if (definition.wholeLine && replacementOrNull === null) {
+      mixed = mixed.replaceAll(new RegExp(`.*${variable}.*\n?`, 'g'), '');
+      continue;
+    }
+
+    // handle pattern-based replacement
+    if (definition.pattern) {
+      mixed = replacementOrNull === null
+        ? mixed.replaceAll(definition.pattern, '')
+        : mixed.replaceAll(definition.pattern, replacementOrNull);
+      continue;
+    }
+
+    // Simple replacement
+    if (replacementOrNull !== null)
+      mixed = mixed.replaceAll(variable, replacementOrNull);
+  }
+
+  // Handle custom fields
+  if (context.customFields)
+    for (const [placeholder, replacement] of Object.entries(context.customFields))
+      mixed = mixed.replaceAll(placeholder, replacement);
+
+  // Remove deprecated variables (whole line removal)
+  // - {{LLM.Cutoff}} - deprecated on 2026-01-29; not used, maybe back to gpt-4, but then we could just update those prompts
+  mixed = mixed.replaceAll(/.*\{\{LLM\.Cutoff}}.*\n/g, '');
+
+  // At most leave 2 newlines in a row
+  mixed = mixed.replace(/\n{3,}/g, '\n\n');
+
+  return mixed;
+}
 
 
 /**
  * This will be made a module and fully reactive in the future.
+ * NOTE: think twice before changing the variables, as they can be in data at rest (can they?)
  */
 export function bareBonesPromptMixer(_template: string, assistantLlmId: DLLMId | undefined, customFields: Record<string, string> | undefined = undefined) {
-
-  let mixed = _template;
-
-  // {{Today}} - yyyy-mm-dd but in user's local time, not UTC
-  const today = new Date();
-  const varToday = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
-  mixed = mixed.replaceAll('{{Today}}', varToday);
-
-  // {{LocaleNow}} - enough information to get on the same page with the user
-  if (mixed.includes('{{LocaleNow}}')) {
-    // const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-    // Format the current date and time according to the user's locale and timezone
-    const formatter = new Intl.DateTimeFormat(browserLangOrUS, {
-      weekday: 'short', // Full name of the day of the week
-      year: 'numeric', // Numeric year
-      month: 'short', // Full name of the month
-      day: 'numeric', // Numeric day of the month
-      hour: '2-digit', // 2-digit hour
-      minute: '2-digit', // 2-digit minute
-      timeZoneName: 'short', // Short timezone name (e.g., GMT, CST)
-      hour12: true, // Use 12-hour time format; set to false for 24-hour format if preferred
-    });
-    const formattedDateTime = formatter.format(new Date());
-    mixed = mixed.replaceAll('{{LocaleNow}}', formattedDateTime /*`${formattedDateTime} (${userTimezone})`*/);
-  }
-
-  // Static replacements
-  // {{Prefer...}}
-  mixed = mixed.replace('{{PreferTables}}', 'Data presentation: prefer tables (auto-columns)');
-  // {{Render...}}
-  mixed = mixed.replace('{{RenderMermaid}}', 'Mermaid rendering: Enabled');
-  mixed = mixed.replace('{{RenderPlantUML}}', 'PlantUML rendering: Enabled');
-  mixed = mixed.replace('{{RenderSVG}}', 'SVG in markdown rendering: Enabled');
-  // {{Input...}} / {{Tool...}} - TBA
-  mixed = mixed.replace('{{InputImage0}}', 'Image input capabilities: Disabled');
-  mixed = mixed.replace('{{ToolBrowser0}}', 'Web browsing capabilities: Disabled');
-
-  // {{Cutoff}} or remove the line
-  let varCutoff: string | undefined;
-  try {
-    if (assistantLlmId)
-      varCutoff = findLLMOrThrow(assistantLlmId).trainingDataCutoff;
-  } catch (e) {
-    // ignore...
-  }
-  if (varCutoff)
-    mixed = mixed.replaceAll('{{Cutoff}}', varCutoff);
-  else
-    mixed = mixed.replaceAll(/.*{{Cutoff}}.*\n?/g, '');
-
-  // Handle custom fields
-  if (customFields)
-    for (const [placeholder, replacement] of Object.entries(customFields))
-      mixed = mixed.replaceAll(placeholder, replacement);
-
-  // at most leave 2 newlines in a row
-  mixed = mixed.replace(/\n{3,}/g, '\n\n');
-
-  return mixed;
+  const { autoSuggestHTMLUI, /*autoSuggestDiagrams,*/ autoVndAntBreakpoints } = getChatAutoAI();
+  return replacePromptVariables(_template, {
+    assistantLlmId,
+    deviceIsDesktop: Is.Desktop,
+    deviceBrowserLang: BrowserLang.orUS,
+    lowHourPrecision: autoVndAntBreakpoints,
+    fixupAutoSuggestHTMLUI: autoSuggestHTMLUI,
+    customFields,
+  });
 }

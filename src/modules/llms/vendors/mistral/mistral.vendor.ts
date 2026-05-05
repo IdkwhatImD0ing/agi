@@ -1,33 +1,27 @@
-import { MistralIcon } from '~/common/components/icons/vendors/MistralIcon';
-
 import type { IModelVendor } from '../IModelVendor';
-import type { OpenAIAccessSchema } from '../../server/openai/openai.router';
+import type { OpenAIAccessSchema } from '../../server/openai/openai.access';
 
-import { LLMOptionsOpenAI, ModelVendorOpenAI, SourceSetupOpenAI } from '../openai/openai.vendor';
-import { OpenAILLMOptions } from '../openai/OpenAILLMOptions';
-
-import { MistralSourceSetup } from './MistralSourceSetup';
+import { DOpenAIServiceSettings, ModelVendorOpenAI } from '../openai/openai.vendor';
 
 
 // special symbols
 
-export type SourceSetupMistral = Pick<SourceSetupOpenAI, 'oaiKey' | 'oaiHost'>;
+type DMistralServiceSettings = Pick<DOpenAIServiceSettings, 'oaiKey' | 'oaiHost' | 'csf'>;
 
 
 /** Implementation Notes for the Mistral vendor
  */
-export const ModelVendorMistral: IModelVendor<SourceSetupMistral, OpenAIAccessSchema, LLMOptionsOpenAI> = {
+export const ModelVendorMistral: IModelVendor<DMistralServiceSettings, OpenAIAccessSchema> = {
   id: 'mistral',
   name: 'Mistral',
-  rank: 15,
+  displayRank: 18,
+  displayGroup: 'cloud',
   location: 'cloud',
   instanceLimit: 1,
-  hasBackendCapKey: 'hasLlmMistral',
+  hasServerConfigKey: 'hasLlmMistral',
 
-  // components
-  Icon: MistralIcon,
-  SourceSetupComponent: MistralSourceSetup,
-  LLMOptionsComponent: OpenAILLMOptions,
+  /// client-side-fetch ///
+  csfAvailable: _csfMistralAvailable,
 
   // functions
   initializeSetup: () => ({
@@ -39,15 +33,18 @@ export const ModelVendorMistral: IModelVendor<SourceSetupMistral, OpenAIAccessSc
   },
   getTransportAccess: (partialSetup): OpenAIAccessSchema => ({
     dialect: 'mistral',
+    clientSideFetch: _csfMistralAvailable(partialSetup) && !!partialSetup?.csf,
     oaiKey: partialSetup?.oaiKey || '',
     oaiOrg: '',
     oaiHost: partialSetup?.oaiHost || '',
     heliKey: '',
-    moderationCheck: false,
   }),
 
   // OpenAI transport ('mistral' dialect in 'access')
   rpcUpdateModelsOrThrow: ModelVendorOpenAI.rpcUpdateModelsOrThrow,
-  rpcChatGenerateOrThrow: ModelVendorOpenAI.rpcChatGenerateOrThrow,
-  streamingChatGenerateOrThrow: ModelVendorOpenAI.streamingChatGenerateOrThrow,
+
 };
+
+function _csfMistralAvailable(s?: Partial<DMistralServiceSettings>) {
+  return !!s?.oaiKey;
+}

@@ -1,84 +1,181 @@
-import { z } from 'zod';
-import { LLM_IF_OAI_Chat, LLM_IF_OAI_Complete, LLM_IF_OAI_Fn, LLM_IF_OAI_Json, LLM_IF_OAI_Vision } from '../store-llms';
+import * as z from 'zod/v4';
+
+import type { DModelParameterId } from '~/common/stores/llms/llms.parameters'; // imported for making sure we sync
+import { LLMS_ALL_INTERFACES } from '~/common/stores/llms/llms.types';
 
 
-// Model Description: a superset of LLM model descriptors
+export type RequestAccessValues = { headers: HeadersInit; url: string; };
 
-const pricingSchema = z.object({
-  chatIn: z.number().optional(), // Cost per Million input tokens
-  chatOut: z.number().optional(), // Cost per Million output tokens
-});
+export type ModelDescriptionSchema = z.infer<typeof ModelDescription_schema>;
 
-const benchmarkSchema = z.object({
-  cbaElo: z.number().optional(),
-  cbaMmlu: z.number().optional(),
-  heCode: z.number().optional(), // HumanEval, code, 0-shot
-  vqaMmmu: z.number().optional(), // Visual Question Answering, MMMU, 0-shot
-});
+// export namespace AixWire_API_ListModels {
 
-// const rateLimitsSchema = z.object({
-//   reqPerMinute: z.number().optional(),
-// });
+/*
+ * Note: this needs to be moved to the AixWire_API_ListModels namespace
+ * HOWEVER if we did it now there will be some circular dependency issue
+ */
 
-const interfaceSchema = z.enum([LLM_IF_OAI_Chat, LLM_IF_OAI_Fn, LLM_IF_OAI_Complete, LLM_IF_OAI_Vision, LLM_IF_OAI_Json]);
 
-// NOTE: update the `fromManualMapping` function if you add new fields
-const modelDescriptionSchema = z.object({
-  id: z.string(),
-  label: z.string(),
-  created: z.number().optional(),
-  updated: z.number().optional(),
-  description: z.string(),
-  contextWindow: z.number().nullable(),
-  maxCompletionTokens: z.number().optional(),
-  // rateLimits: rateLimitsSchema.optional(),
-  trainingDataCutoff: z.string().optional(),
-  interfaces: z.array(interfaceSchema),
-  benchmark: benchmarkSchema.optional(),
-  pricing: pricingSchema.optional(),
-  hidden: z.boolean().optional(),
-  // TODO: add inputTypes/Kinds..
-});
+/// Benchmark
 
-// this is also used by the Client
-export type ModelDescriptionSchema = z.infer<typeof modelDescriptionSchema>;
-
-export const llmsListModelsOutputSchema = z.object({
-  models: z.array(modelDescriptionSchema),
+const BenchmarksScores_schema = z.object({
+  cbaElo: z.number().optional(), // Chat Bot Arena ELO score
+  // removed others for now to reduce noise - also maybe we shall have a mapping table instead
 });
 
 
-// Chat Generation Input (some parts of)
+/// Pricing
 
-const generateContextNameSchema = z.enum(['chat-ai-title', 'chat-ai-summarize', 'chat-followup-diagram', 'chat-react-turn', 'draw-expand-prompt']);
-export type GenerateContextNameSchema = z.infer<typeof generateContextNameSchema>;
-export const llmsGenerateContextSchema = z.object({
-  method: z.literal('chat-generate'),
-  name: generateContextNameSchema,
-  ref: z.string(),
+const PricePerMToken_schema = z.number().or(z.literal('free'));
+
+const PriceUpTo_schema = z.object({
+  upTo: z.number().nullable(),
+  price: PricePerMToken_schema,
 });
 
-const streamingContextNameSchema = z.enum(['conversation', 'ai-diagram', 'ai-flattener', 'call', 'beam-scatter', 'beam-gather', 'persona-extract']);
-export type StreamingContextNameSchema = z.infer<typeof streamingContextNameSchema>;
-export const llmsStreamingContextSchema = z.object({
-  method: z.literal('chat-stream'),
-  name: streamingContextNameSchema,
-  ref: z.string(),
-});
-
-
-// (non-streaming) Chat Generation Output
-
-export const llmsChatGenerateOutputSchema = z.object({
-  role: z.enum(['assistant', 'system', 'user']),
-  content: z.string(),
-  finish_reason: z.union([z.enum(['stop', 'length']), z.null()]),
-});
-
-export const llmsChatGenerateWithFunctionsOutputSchema = z.union([
-  llmsChatGenerateOutputSchema,
-  z.object({
-    function_name: z.string(),
-    function_arguments: z.record(z.any()),
-  }),
+const TieredPricing_schema = z.union([
+  PricePerMToken_schema,
+  z.array(PriceUpTo_schema),
 ]);
+
+// NOTE: (!) keep this in sync with DPricingChatGenerate (llms.pricing.ts)
+const PricingChatGenerate_schema = z.object({
+  input: TieredPricing_schema.optional(),
+  output: TieredPricing_schema.optional(),
+  // Future: Perplexity has a cost per request, consider this for future additions
+  // perRequest: z.number().optional(), // New field for fixed per-request pricing
+  cache: z.discriminatedUnion('cType', [
+    z.object({
+      cType: z.literal('ant-bp'), // [Anthropic] Breakpoint-based caching
+      read: TieredPricing_schema,
+      write: TieredPricing_schema,
+      duration: z.number(),
+    }),
+    z.object({
+      cType: z.literal('oai-ac'), // [OpenAI] Automatic Caching
+      read: TieredPricing_schema,
+      // write: TieredPricing_schema, // Not needed, as it's the same as input cost, i.e. = 0
+    }),
+  ]).optional(),
+  // Not for the server-side, computed on the client only
+  // _isFree: z.boolean().optional(),
+});
+
+
+/// Model Description (out)
+const ModelParameterSpec_schema = z.object({
+  /**
+   * User-changeable parameters for this LLM.
+   *
+   * Uncommon idiosyncratic parameters for this model
+   * - we have only the 'extra' params here, as `llmRef`, `llmResponseTokens` and `llmTemperature` are common
+   * - see `llms.parameters.ts` for the full list
+   *
+   * NOTE: (!) keep this in sync with `DModelParameterId` (llms.parameters.ts) which is also used in AixAPI_Model when making the request
+   */
+  paramId: z.enum([
+    'llmTopP',
+    'llmForceNoStream',
+    // Vendor-specific effort params (converge to unified `effort` wire field)
+    'llmVndAntEffort',
+    'llmVndGemEffort',
+    'llmVndOaiEffort',
+    'llmVndMiscEffort',
+    // Anthropic
+    'llmVndAnt1MContext',
+    'llmVndAntInfSpeed',
+    'llmVndAntSkills',
+    'llmVndAntThinkingBudget',
+    'llmVndAntWebDynamic',
+    'llmVndAntWebFetch',
+    'llmVndAntWebFetchMaxUses',
+    'llmVndAntWebSearch',
+    'llmVndAntWebSearchMaxUses',
+    // Bedrock
+    'llmVndBedrockAPI',
+    // Gemini
+    'llmVndGeminiAspectRatio',
+    'llmVndGeminiCodeExecution',
+    'llmVndGeminiComputerUse',
+    'llmVndGeminiGoogleSearch',
+    'llmVndGeminiImageSize',
+    'llmVndGeminiMediaResolution',
+    'llmVndGeminiThinkingBudget',
+    // 'llmVndGeminiUrlContext',
+    // Moonshot
+    'llmVndMoonshotWebSearch',
+    // OpenAI
+    'llmVndOaiRestoreMarkdown',
+    'llmVndOaiVerbosity',
+    'llmVndOaiWebSearchContext',
+    'llmVndOaiWebSearchGeolocation',
+    'llmVndOaiImageGeneration',
+    'llmVndOaiCodeInterpreter',
+    // OpenRouter
+    'llmVndOrtWebSearch',
+    // Perplexity
+    'llmVndPerplexityDateFilter',
+    'llmVndPerplexitySearchMode',
+    // xAI
+    'llmVndXaiCodeExecution',
+    'llmVndXaiSearchInterval',
+    'llmVndXaiWebSearch',
+    'llmVndXaiXSearch',
+    'llmVndXaiXSearchHandles',
+  ] satisfies DModelParameterId[]),
+  required: z.boolean().optional(),
+  hidden: z.boolean().optional(),
+  initialValue: z.number().or(z.string()).or(z.boolean()).nullable().optional(),
+  // special params
+  enumValues: z.array(z.string()).optional(), // restrict enum values for this model
+  rangeOverride: z.tuple([z.number(), z.number()]).optional(), // [min, max]
+});
+
+export const ModelDescription_schema = z.object({
+  id: z.string(),
+  idVariant: z.string().optional(), // only used on the client by '_createDLLMFromModelDescription' to instantiate 'unique' copies of the same model
+  label: z.string(),
+  created: z.int().optional(),
+  updated: z.int().optional(),
+  description: z.string(),
+  contextWindow: z.int().nullable(),
+  interfaces: z.array(z.enum(LLMS_ALL_INTERFACES).or(z.string())), // backward compatibility: to not Break client-side interface parsing on newer server
+  parameterSpecs: z.array(ModelParameterSpec_schema).optional(),
+  maxCompletionTokens: z.int().optional(), // initial parameter value for 'llmResponseTokens'
+  // rateLimits: rateLimitsSchema.optional(),
+  benchmark: BenchmarksScores_schema.optional(),
+  chatPrice: PricingChatGenerate_schema.optional(),
+  hidden: z.boolean().optional(),
+  // parameter initializers for vendor-specific defaults
+  initialTemperature: z.number().nullish(), // vendor-specific initial 'llmTemperature' (e.g. Gemini has 1.0)
+});
+
+
+/// Vendor Lookup for OpenRouter parameter inheritance
+// Each vendor's lookup filters to only what works through OpenRouter's OAI-compatible API.
+// OpenRouter merges these with its own auto-detected interfaces and params.
+export type OrtVendorLookupResult = {
+  interfaces?: ModelDescriptionSchema['interfaces'];
+  parameterSpecs?: ModelDescriptionSchema['parameterSpecs'];
+  initialTemperature?: number; // vendor-specific default (e.g. Gemini 1.0); undefined = use global fallback (0.5)
+};
+
+
+/// ListModels Response
+
+export const ListModelsResponse_schema = z.object({
+  models: z.array(ModelDescription_schema),
+});
+
+
+/// File Metadata Response
+
+export const FileMetadataResponse_schema = z.object({
+  id: z.string(),
+  type: z.literal('file'),
+  filename: z.string(),
+  mime_type: z.string(),
+  size_bytes: z.number(),
+  created_at: z.string(),
+  downloadable: z.boolean().optional(),
+});

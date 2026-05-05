@@ -6,13 +6,17 @@ import ReplayIcon from '@mui/icons-material/Replay';
 
 import { useStreamChatText } from '~/modules/aifn/useStreamChatText';
 
-import { ConfirmationModal } from '~/common/components/ConfirmationModal';
-import { GoodModal } from '~/common/components/GoodModal';
+import { ConfirmationModal } from '~/common/components/modals/ConfirmationModal';
+import { ConversationsManager } from '~/common/chat-overlay/ConversationsManager';
+import { DConversationId } from '~/common/stores/chat/chat.conversation';
+import { GoodModal } from '~/common/components/modals/GoodModal';
 import { InlineTextarea } from '~/common/components/InlineTextarea';
-import { createDMessage, DConversationId, DMessage, getConversation, useChatStore } from '~/common/state/store-chats';
+import { createDMessageTextContent, DMessage, messageFragmentsReduceText } from '~/common/stores/chat/chat.message';
+import { getLLMLabel } from '~/common/stores/llms/llms.types';
 import { useFormRadioLlmType } from '~/common/components/forms/useFormRadioLlmType';
 
 import { FLATTEN_PROFILES, FlattenStyleType } from './flatten.data';
+import { useModelDomain } from '~/common/stores/llms/hooks/useModelDomain';
 
 
 function StylesList(props: { selectedStyle: FlattenStyleType | null, onSelectedStyle: (type: FlattenStyleType) => void }) {
@@ -49,7 +53,7 @@ function FlatteningProgress(props: { llmLabel: string, partialText: string | nul
     <Box sx={{ mx: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
       <CircularProgress />
       <Typography>
-        {props.partialText?.length ? `${props.partialText.length} characters` : 'Flattening'}...
+        {props.partialText?.length ? `${props.partialText.length} characters` : 'Compacting'}...
       </Typography>
       <Typography level='body-sm'>
         This may take up to a minute.
@@ -62,13 +66,14 @@ function FlatteningProgress(props: { llmLabel: string, partialText: string | nul
 }
 
 
-function encodeConversationAsUserMessage(userPrompt: string, messages: DMessage[]): string {
+function encodeConversationAsUserMessage(userPrompt: string, messages: Readonly<DMessage[]>): string {
   let encodedMessages = '';
 
   for (const message of messages) {
     if (message.role === 'system') continue;
     const author = message.role === 'user' ? 'User' : 'Assistant';
-    const text = message.text.replace(/\n/g, '\n\n');
+    const messageText = messageFragmentsReduceText(message.fragments);
+    const text = messageText.replace(/\n/g, '\n\n');
     encodedMessages += `---${author}---\n${text}\n\n`;
   }
 
@@ -78,7 +83,7 @@ function encodeConversationAsUserMessage(userPrompt: string, messages: DMessage[
 
 export function FlattenerModal(props: {
   conversationId: string | null,
-  onConversationBranch: (conversationId: DConversationId, messageId: string | null) => DConversationId | null,
+  onConversationBranch: (conversationId: DConversationId, messageId: string | null, addSplitPane: boolean) => DConversationId | null,
   onClose: () => void,
 }) {
 
@@ -89,7 +94,8 @@ export function FlattenerModal(props: {
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
 
   // external state
-  const [llm, llmComponent] = useFormRadioLlmType();
+  const { domainModelId: runModelId } = useModelDomain('primaryChat');
+  const [llm, llmComponent] = useFormRadioLlmType('Model', runModelId ?? null, 'util');
   const {
     isStreaming, text: flattenedText, partialText, streamError,
     startStreaming, setText, resetText,
@@ -99,9 +105,11 @@ export function FlattenerModal(props: {
   const handlePerformFlattening = React.useCallback(async (flattenStyle: FlattenStyleType) => {
 
     // validate config (or set error)
-    const conversation = getConversation(props.conversationId);
-    const messages = conversation?.messages;
-    if (!messages || !messages.length)
+    if (!props.conversationId)
+      return setErrorMessage('No conversation selected');
+    const cHandler = ConversationsManager.getHandler(props.conversationId);
+    const messages = !cHandler.isValid() ? [] : cHandler.historyViewHeadOrThrow('flattener-modal');
+    if (!messages.length)
       return setErrorMessage('No messages in conversation');
     if (!llm)
       return setErrorMessage('No model selected');
@@ -110,14 +118,17 @@ export function FlattenerModal(props: {
       return setErrorMessage('No style selected');
 
     setSelectedStyle(flattenStyle);
-    setSelectedLLMLabel(llm.label);
+    setSelectedLLMLabel(getLLMLabel(llm));
     setErrorMessage(null);
 
     // start (auto-abort previous and at unmount)
-    await startStreaming(llm.id, [
-      { role: 'system', content: flattenProfile.systemPrompt },
-      { role: 'user', content: encodeConversationAsUserMessage(flattenProfile.userPrompt, messages) },
-    ], 'ai-flattener', messages[0].id);
+    await startStreaming(
+      llm.id,
+      flattenProfile.systemPrompt,
+      [{ role: 'user', text: encodeConversationAsUserMessage(flattenProfile.userPrompt, messages) }],
+      'ai-flattener',
+      messages[0].id,
+    );
 
   }, [llm, props.conversationId, startStreaming]);
 
@@ -133,10 +144,12 @@ export function FlattenerModal(props: {
     if (!props.conversationId || !selectedStyle || !flattenedText) return;
     let newConversationId: string | null = props.conversationId;
     if (branch)
-      newConversationId = props.onConversationBranch(props.conversationId, null);
+      newConversationId = props.onConversationBranch(props.conversationId, null, false /* no pane from Flatter new */);
     if (newConversationId) {
-      const newRootMessage = createDMessage('user', flattenedText);
-      useChatStore.getState().setMessages(newConversationId, [newRootMessage]);
+      const ncHandler = ConversationsManager.getHandler(newConversationId);
+      const newRootMessage = createDMessageTextContent('user', flattenedText);// [new chat] user:former chat summary
+      ncHandler.historyClear();
+      ncHandler.messageAppend(newRootMessage);
     }
     props.onClose();
   };
@@ -147,7 +160,7 @@ export function FlattenerModal(props: {
   return (
     <GoodModal
       open={!!props.conversationId} dividers
-      title={!selectedStyle ? 'Compression' : 'Flattening...'}
+      title={!selectedStyle ? 'Compact' : 'Compacting...'}
       onClose={props.onClose}
     >
 
@@ -196,7 +209,7 @@ export function FlattenerModal(props: {
         )}
 
         {/* Review or Edit Text */}
-        {isSuccess && <InlineTextarea initialText={flattenedText} onEdit={setText} />}
+        {isSuccess && <InlineTextarea initialText={flattenedText} selectAllOnFocus={false} onEdit={setText} />}
 
       </Box>}
 
@@ -208,7 +221,7 @@ export function FlattenerModal(props: {
       {/* [confirmation] Overwrite Conversation */}
       {confirmOverwrite && <ConfirmationModal
         open onClose={() => setConfirmOverwrite(false)} onPositive={() => handleReplaceConversation(false)}
-        confirmationText='Are you sure you want to overwrite the conversation with the flattened text?'
+        confirmationText='Are you sure you want to overwrite the conversation with the compacted text?'
         positiveActionText='Replace conversation'
       />}
 

@@ -1,24 +1,39 @@
-## Changelog
+## Archived Versions - Changelog
 
 This is a high-level changelog. Calls out some of the high level features batched
 by release.
 
+- For the live changelog, see [big-agi.com/changes](https://big-agi.com/changes)
 - For the live roadmap, please see [the GitHub project](https://github.com/users/enricoros/projects/4/views/2)
 
-### 1.17.0 - Jun 2024
+> NOTE: with the release of 2.0.0 we switching to [big-agi.com/changes](https://big-agi.com/changes) for the
+> continuously updated changelog.
 
-- milestone: [1.17.0](https://github.com/enricoros/big-agi/milestone/17)
-- work in progress: [big-AGI open roadmap](https://github.com/users/enricoros/projects/4/views/2), [help here](https://github.com/users/enricoros/projects/4/views/4)
+### What's New in 2 · Oct 31, 2025 · Open
 
-### What's New in 1.16.1...1.16.8 · Sep 13, 2024 (patch releases)
+- **Big-AGI Open** is ready and more productive and faster than ever, with:
+- **Beam 2**: multi-modal, program-based, follow-ups, save presets
+- Top-notch AI models support including **agentic models** and **reasoning models**
+- **Image Generation** and editing with Nano Banana and gpt-image-1
+- **Web Search** with citations for supported models
+- **UI** & Mobile UI overhaul with peeking and side panels
+- And all of the [Big-AGI 2 changes](https://github.com/enricoros/big-AGI/issues/567#issuecomment-2262187617) and more
+- Built for the future, madly optimized
 
-- 1.16.8: OpenAI ChatGPT-4o Latest (o1-preview and o1-mini are supported in Big-AGI 2)
+### What's New in 1.16.1...1.16.13 · (patch releases)
+
+- 1.16.13: Docker fix (#840)
+- 1.16.12: Dockerfile update (#840)
+- 1.16.11: v1 final release, documentation updates
+- 1.16.10: OpenRouter models support
+- 1.16.9: Docker Gemini fix, R1 models support
+- 1.16.8: OpenAI ChatGPT-4o Latest, o1 models support
 - 1.16.7: OpenAI support for GPT-4o 2024-08-06
 - 1.16.6: Groq support for Llama 3.1 models
 - 1.16.5: GPT-4o Mini support
 - 1.16.4: 8192 tokens support for Claude 3.5 Sonnet
 - 1.16.3: Anthropic Claude 3.5 Sonnet model support
-- 1.16.2: Improve web downloads, as text, markdwon, or HTML
+- 1.16.2: Improve web downloads, as text, markdown, or HTML
 - 1.16.2: Proper support for Gemini models
 - 1.16.2: Added the latest Mistral model
 - 1.16.2: Tokenizer support for gpt-4o
@@ -46,7 +61,7 @@ by release.
 ### What's New in 1.15.0 · April 1, 2024 · Beam
 
 - ⚠️ [**Beam**: the multi-model AI chat](https://big-agi.com/blog/beam-multi-model-ai-reasoning). find better answers, faster - a game-changer for brainstorming, decision-making, and creativity. [#443](https://github.com/enricoros/big-AGI/issues/443)
-- Managed Deployments **Auto-Configuration**: simplify the UI mdoels setup with backend-set models. [#436](https://github.com/enricoros/big-AGI/issues/436)
+- Managed Deployments **Auto-Configuration**: simplify the UI models setup with backend-set models. [#436](https://github.com/enricoros/big-AGI/issues/436)
 - Message **Starring ⭐**: star important messages within chats, to attach them later. [#476](https://github.com/enricoros/big-AGI/issues/476)
 - Enhanced the default Persona
 - Fixes to Gemini models and SVGs, improvements to UI and icons
@@ -58,7 +73,7 @@ by release.
 - New **[Perplexity](https://www.perplexity.ai/)** and **[Groq](https://groq.com/)** integration (thanks @Penagwin). [#407](https://github.com/enricoros/big-AGI/issues/407), [#427](https://github.com/enricoros/big-AGI/issues/427)
 - **[LocalAI](https://localai.io/models/)** deep integration, including support for [model galleries](https://github.com/enricoros/big-AGI/issues/411)
 - **Mistral** Large and Google **Gemini 1.5** support
-- Performance optimizations: runs [much faster](https://twitter.com/enricoros/status/1756553038293303434?utm_source=localhost:3000&utm_medium=big-agi), saves lots of power, reduces memory usage
+- Performance optimizations: runs [much faster](https://x.com/enricoros/status/1756553038293303434?utm_source=localhost:3000&utm_medium=big-agi), saves lots of power, reduces memory usage
 - Enhanced UX with auto-sizing charts, refined search and folder functionalities, perfected scaling
 - And with more UI improvements, documentation, bug fixes (20 tickets), and developer enhancements
 - [Release notes](https://github.com/enricoros/big-AGI/releases/tag/v1.14.0), and changes [v1.13.1...v1.14.0](https://github.com/enricoros/big-AGI/compare/v1.13.1...v1.14.0) (233 commits, 8,000+ lines changed)
@@ -138,7 +153,7 @@ https://github.com/enricoros/big-AGI/assets/1590910/a6b8e172-0726-4b03-a5e5-10cf
 - **Overheat LLMs**: Push the creativity with higher LLM temperatures. [#256](https://github.com/enricoros/big-agi/issues/256)
 - **Model Options Shortcut**: Quick adjust with `Ctrl+Shift+O`
 - Optimized Voice Input and Performance
-- Latest Ollama and Oobabooga models
+- Latest Ollama models
 - For developers: **Password Protection**: HTTP Basic Auth. [Learn How](https://github.com/enricoros/big-agi/blob/main/docs/deploy-authentication.md)
 
 ### What's New in 1.6.0 - Nov 28, 2023 · Surf's Up
@@ -170,7 +185,7 @@ For Developers:
   first request to get the configuration. See
   https://github.com/enricoros/big-agi/blob/main/src/modules/backend/backend.router.ts.
 - CloudFlare developers: please change the deployment command to
-  `rm app/api/trpc-node/[trpc]/route.ts && npx @cloudflare/next-on-pages@1`,
+  `rm app/api/cloud/[trpc]/route.ts && npx @cloudflare/next-on-pages@1`,
   as we transitioned to the App router in NextJS 14. The documentation in
   [docs/deploy-cloudflare.md](../docs/deploy-cloudflare.md) is updated
 
@@ -187,7 +202,6 @@ For Developers:
 - **Camera OCR** - real-world AI - take a picture of a text, and chat with it
 - **Anthropic models** support, e.g. Claude
 - **Backup/Restore** - save chats, and restore them later
-- **[Local model support with Oobabooga server](../docs/config-local-oobabooga)** - run your own LLMs!
 - **Flatten conversations** - conversations summarizer with 4 modes
 - **Fork conversations** - create a new chat, to try with different endings
 - New commands: /s to add a System message, and /a for an Assistant message
@@ -217,7 +231,6 @@ For Developers:
 - **[Install Mobile APP](../docs/pixels/feature_pwa.png)** 📲 looks like native (@harlanlewis)
 - **[UI language](../docs/pixels/feature_language.png)** with auto-detect, and future app language! (@tbodyston)
 - **PDF Summarization** 🧩🤯 - ask questions to a PDF! (@fredliubojin)
-- **Code Execution: [Codepen](https://codepen.io/)** 💻 (@harlanlewis)
 - **[SVG Drawing](../docs/pixels/feature_svg_drawing.png)** - draw with AI 🎨
 - Chats: multiple chats, AI titles, Import/Export, Selection mode
 - Rendering: Markdown, SVG, improved Code blocks

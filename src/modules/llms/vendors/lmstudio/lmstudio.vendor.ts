@@ -1,28 +1,24 @@
 import type { IModelVendor } from '../IModelVendor';
-import type { OpenAIAccessSchema } from '../../server/openai/openai.router';
+import type { OpenAIAccessSchema } from '../../server/openai/openai.access';
 
-import { LLMOptionsOpenAI, ModelVendorOpenAI } from '../openai/openai.vendor';
-import { OpenAILLMOptions } from '../openai/OpenAILLMOptions';
-
-import { LMStudioSourceSetup } from './LMStudioSourceSetup';
-import { LMStudioIcon } from '~/common/components/icons/vendors/LMStudioIcon';
+import { ModelVendorOpenAI } from '../openai/openai.vendor';
 
 
-export interface SourceSetupLMStudio {
+interface DLMStudioServiceSettings {
   oaiHost: string;  // use OpenAI-compatible non-default hosts (full origin path)
+  csf?: boolean;
 }
 
-export const ModelVendorLMStudio: IModelVendor<SourceSetupLMStudio, OpenAIAccessSchema, LLMOptionsOpenAI> = {
+export const ModelVendorLMStudio: IModelVendor<DLMStudioServiceSettings, OpenAIAccessSchema> = {
   id: 'lmstudio',
   name: 'LM Studio',
-  rank: 21,
+  displayRank: 52,
+  displayGroup: 'local',
   location: 'local',
   instanceLimit: 1,
 
-  // components
-  Icon: LMStudioIcon,
-  SourceSetupComponent: LMStudioSourceSetup,
-  LLMOptionsComponent: OpenAILLMOptions,
+  /// client-side-fetch ///
+  csfAvailable: _csfLMStudioAvailable,
 
   // functions
   initializeSetup: () => ({
@@ -30,15 +26,20 @@ export const ModelVendorLMStudio: IModelVendor<SourceSetupLMStudio, OpenAIAccess
   }),
   getTransportAccess: (partialSetup) => ({
     dialect: 'lmstudio',
+    clientSideFetch: _csfLMStudioAvailable(partialSetup) && !!partialSetup?.csf,
     oaiKey: '',
     oaiOrg: '',
     oaiHost: partialSetup?.oaiHost || '',
     heliKey: '',
-    moderationCheck: false,
   }),
 
   // OpenAI transport ('lmstudio' dialect in 'access')
   rpcUpdateModelsOrThrow: ModelVendorOpenAI.rpcUpdateModelsOrThrow,
-  rpcChatGenerateOrThrow: ModelVendorOpenAI.rpcChatGenerateOrThrow,
-  streamingChatGenerateOrThrow: ModelVendorOpenAI.streamingChatGenerateOrThrow,
+
 };
+
+function _csfLMStudioAvailable(_s?: Partial<DLMStudioServiceSettings>) {
+  // always available for local vendors - LM Studio defaults to http://localhost:1234
+  // was: return !!s?.oaiHost;
+  return true;
+}

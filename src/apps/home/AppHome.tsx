@@ -2,8 +2,9 @@ import { useState, useEffect } from 'react';
 import { Box, Typography, Button, CssVarsProvider } from '@mui/joy';
 import { SignInButton, SignUpButton, SignedIn, SignedOut, UserButton, useUser } from '@clerk/nextjs';
 import { doc, getDoc } from 'firebase/firestore';
-import { firestore } from 'src/firebase';
-import { useRouter } from 'next/navigation';
+import { useRouter } from 'next/router';
+
+import { firestore } from '../../firebase';
 
 export default function Home() {
   const { isSignedIn, user } = useUser();

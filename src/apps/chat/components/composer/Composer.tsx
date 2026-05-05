@@ -1,183 +1,236 @@
 import * as React from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { fileOpen, FileWithHandle } from 'browser-fs-access';
 
-import { Box, Button, ButtonGroup, Card, Dropdown, Grid, IconButton, Menu, MenuButton, MenuItem, Textarea, Tooltip, Typography } from '@mui/joy';
-import { ColorPaletteProp, SxProps, VariantProp } from '@mui/joy/styles/types';
-import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline';
-import AttachFileIcon from '@mui/icons-material/AttachFile';
-import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
-import AutoModeIcon from '@mui/icons-material/AutoMode';
+import type { ColorPaletteProp, SxProps, VariantProp } from '@mui/joy/styles/types';
+import { Box, Button, ButtonGroup, Card, Grid, IconButton, Textarea, Typography } from '@mui/joy';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
-import FormatPaintTwoToneIcon from '@mui/icons-material/FormatPaintTwoTone';
 import PsychologyIcon from '@mui/icons-material/Psychology';
 import SendIcon from '@mui/icons-material/Send';
 import StopOutlinedIcon from '@mui/icons-material/StopOutlined';
 import TelegramIcon from '@mui/icons-material/Telegram';
 
-import type { ChatModeId } from '../../AppChat';
-import { useChatMicTimeoutMsValue } from '../../store-app-chat';
+import type { AppChatIntent } from '../../AppChat';
+import { useChatAutoSuggestAttachmentPrompts, useChatMicTimeoutMsValue } from '../../store-app-chat';
 
-import type { DLLM } from '~/modules/llms/store-llms';
-import type { LLMOptionsOpenAI } from '~/modules/llms/vendors/openai/openai.vendor';
+import { useAgiAttachmentPrompts } from '~/modules/aifn/agiattachmentprompts/useAgiAttachmentPrompts';
 import { useBrowseCapability } from '~/modules/browse/store-module-browsing';
 
+import { DLLM, getLLMContextTokens, LLM_IF_OAI_Vision } from '~/common/stores/llms/llms.types';
+import { llmChatPricing_adjusted } from '~/common/stores/llms/llms.pricing';
+import { AudioGenerator } from '~/common/util/audio/AudioGenerator';
+import { AudioPlayer } from '~/common/util/audio/AudioPlayer';
+import { ButtonAttachFilesMemo, openFileForAttaching } from '~/common/components/ButtonAttachFiles';
 import { ChatBeamIcon } from '~/common/components/icons/ChatBeamIcon';
-import { ConversationsManager } from '~/common/chats/ConversationsManager';
-import { PreferencesTab, useOptimaLayout } from '~/common/layout/optima/useOptimaLayout';
-import { SpeechResult, useSpeechRecognition } from '~/common/components/useSpeechRecognition';
+import { ConfirmationModal } from '~/common/components/modals/ConfirmationModal';
+import { ConversationsManager } from '~/common/chat-overlay/ConversationsManager';
+import { DMessageId, DMessageMetadata, DMetaReferenceItem, messageFragmentsReduceText } from '~/common/stores/chat/chat.message';
+import { PhPaintBrush } from '~/common/components/icons/phosphor/PhPaintBrush';
+import { ShortcutKey, ShortcutObject, useGlobalShortcuts } from '~/common/components/shortcuts/useGlobalShortcuts';
+import { addSnackbar } from '~/common/components/snackbar/useSnackbarsStore';
 import { animationEnterBelow } from '~/common/util/animUtils';
-import { conversationTitle, DConversationId, DMessageMetadata, getConversation, useChatStore } from '~/common/state/store-chats';
-import { countModelTokens } from '~/common/util/token-counter';
-import { isMacUser } from '~/common/util/pwaUtils';
-import { launchAppCall } from '~/common/app.routes';
-import { lineHeightTextareaMd } from '~/common/app.theme';
-import { platformAwareKeystrokes } from '~/common/components/KeyStroke';
-import { playSoundUrl } from '~/common/util/audioUtils';
-import { supportsClipboardRead } from '~/common/util/clipboardUtils';
+import { browserSpeechRecognitionCapability, PLACEHOLDER_INTERIM_TRANSCRIPT, SpeechResult, useSpeechRecognition } from '~/common/components/speechrecognition/useSpeechRecognition';
+import { DConversationId } from '~/common/stores/chat/chat.conversation';
+import { copyToClipboard, supportsClipboardRead } from '~/common/util/clipboardUtils';
+import { createTextContentFragment, DMessageAttachmentFragment, DMessageContentFragment, duplicateDMessageFragments } from '~/common/stores/chat/chat.fragments';
+import { glueForMessageTokens, marshallWrapDocFragments } from '~/common/stores/chat/chat.tokens';
+import { isValidConversation, useChatStore } from '~/common/stores/chat/store-chats';
+import { getModelParameterValueWithFallback } from '~/common/stores/llms/llms.parameters';
+import { launchAppCall, removeQueryParam, useRouterQuery } from '~/common/app.routes';
+import { lineHeightTextareaMd, themeBgAppChatComposer } from '~/common/app.theme';
+import { optimaOpenPreferences } from '~/common/layout/optima/useOptima';
+import { supportsCameraCapture } from '~/common/components/camera/useCameraCapture';
 import { supportsScreenCapture } from '~/common/util/screenCaptureUtils';
-import { useAppStateStore } from '~/common/state/store-appstate';
-import { useChatOverlayStore } from '~/common/chats/store-chat-overlay-vanilla';
-import { useDebouncer } from '~/common/components/useDebouncer';
-import { useGlobalShortcuts } from '~/common/components/useGlobalShortcuts';
-import { useUICounter, useUIPreferencesStore } from '~/common/state/store-ui';
-import { useUXLabsStore } from '~/common/state/store-ux-labs';
+import { useAttachHandler_CameraOpen, useAttachHandler_Files, useAttachHandler_PasteIntercept, useAttachHandler_ScreenCapture, useAttachHandler_UrlWebLinks } from '~/common/attachment-drafts/attachment-sources/useAttachmentSourceHandlers';
+import { useChatComposerOverlayStore } from '~/common/chat-overlay/store-perchat_vanilla';
+import { useComposerStartupText, useLogicSherpaStore } from '~/common/logic/store-logic-sherpa';
+import { useOverlayComponents } from '~/common/layout/overlays/useOverlayComponents';
+import { useUICounter, useUIPreferencesStore } from '~/common/stores/store-ui';
+import { useUXLabsStore } from '~/common/stores/store-ux-labs';
 
 import type { ActileItem } from './actile/ActileProvider';
+import { providerAttachmentLabels } from './actile/providerAttachmentLabels';
 import { providerCommands } from './actile/providerCommands';
-import { providerStarredMessage, StarredMessageItem } from './actile/providerStarredMessage';
+import { providerStarredMessages, StarredMessageItem } from './actile/providerStarredMessage';
 import { useActileManager } from './actile/useActileManager';
 
-import type { AttachmentId } from './attachments/store-attachments';
-import { Attachments } from './attachments/Attachments';
-import { getSingleTextBlockText, useLLMAttachments } from './attachments/useLLMAttachments';
-import { useAttachments } from './attachments/useAttachments';
+import type { AttachmentDraftId, AttachmentDraftsAction } from '~/common/attachment-drafts/attachment.types';
+import { AttachmentSourcesMemo } from '~/common/attachment-drafts/attachment-sources/AttachmentSources';
+import { useAttachmentDrafts } from '~/common/attachment-drafts/useAttachmentDrafts';
+import { useAttachmentDraftsEnrichment } from '~/common/attachment-drafts/llm-enrichment/useAttachmentDraftsEnrichment';
+import { useGoogleDrivePicker } from '~/common/attachment-drafts/attachment-sources/useGoogleDrivePicker';
 
-import type { ComposerOutputMultiPart } from './composer.types';
-import { ButtonAttachCameraMemo, useCameraCaptureModal } from './buttons/ButtonAttachCamera';
-import { ButtonAttachClipboardMemo } from './buttons/ButtonAttachClipboard';
-import { ButtonAttachFileMemo } from './buttons/ButtonAttachFile';
-import { ButtonAttachScreenCaptureMemo } from './buttons/ButtonAttachScreenCapture';
+import type { ChatExecuteMode } from '../../execute-mode/execute-mode.types';
+import { chatExecuteModeCanAttach, useChatExecuteMode } from '../../execute-mode/useChatExecuteMode';
+
 import { ButtonBeamMemo } from './buttons/ButtonBeam';
 import { ButtonCallMemo } from './buttons/ButtonCall';
+import { ButtonGroupDrawRepeat } from './buttons/ButtonGroupDrawRepeat';
 import { ButtonMicContinuationMemo } from './buttons/ButtonMicContinuation';
 import { ButtonMicMemo } from './buttons/ButtonMic';
 import { ButtonMultiChatMemo } from './buttons/ButtonMultiChat';
 import { ButtonOptionsDraw } from './buttons/ButtonOptionsDraw';
-import { ChatModeMenu } from './ChatModeMenu';
-import { ReplyToBubble } from '../message/ReplyToBubble';
-import { TokenBadgeMemo } from './TokenBadge';
-import { TokenProgressbarMemo } from './TokenProgressbar';
-import { useComposerStartupText } from './store-composer';
+import { ComposerAttachmentDraftsList } from './llmattachments/ComposerAttachmentDraftsList';
+import { ComposerTextAreaActions } from './textarea/ComposerTextAreaActions';
+import { ComposerTextAreaDrawActions } from './textarea/ComposerTextAreaDrawActions';
+import { StatusBarMemo } from '../StatusBar';
+import { TokenBadgeMemo } from './tokens/TokenBadge';
+import { TokenProgressbarMemo } from './tokens/TokenProgressbar';
+import { useComposerDragDrop } from './useComposerDragDrop';
+import { useTextTokenCount } from './tokens/useTextTokenCounter';
 
 
-const zIndexComposerOverlayDrop = 10;
-const zIndexComposerOverlayMic = 20;
+// configuration
+const zIndexComposerOverlayMic = 10;
+const SHOW_TIPS_AFTER_RELOADS = 25;
 
-const dropperCardSx: SxProps = {
+
+const paddingBoxSx: SxProps = {
+  p: { xs: 1, md: 2 },
+};
+
+
+const minimizedSx: SxProps = {
+  ...paddingBoxSx,
   display: 'none',
-  position: 'absolute', bottom: 0, left: 0, right: 0, top: 0,
-  alignItems: 'center', justifyContent: 'center', gap: 2,
-  border: '2px dashed',
-  borderRadius: 'xs',
-  boxShadow: 'none',
-  zIndex: zIndexComposerOverlayDrop,
-} as const;
-
-const dropppedCardDraggingSx: SxProps = {
-  ...dropperCardSx,
-  display: 'flex',
-} as const;
+};
 
 
 /**
  * A React component for composing messages, with attachments and different modes.
  */
 export function Composer(props: {
-  isMobile?: boolean;
+  isMobile: boolean;
   chatLLM: DLLM | null;
-  composerTextAreaRef: React.RefObject<HTMLTextAreaElement>;
-  conversationId: DConversationId | null;
+  composerTextAreaRef: React.RefObject<HTMLTextAreaElement | null>;
+  targetConversationId: DConversationId | null;
   capabilityHasT2I: boolean;
+  capabilityHasT2IEdit: boolean;
   isMulticast: boolean | null;
   isDeveloperMode: boolean;
-  onAction: (conversationId: DConversationId, chatModeId: ChatModeId, multiPartMessage: ComposerOutputMultiPart, metadata?: DMessageMetadata) => boolean;
+  onAction: (conversationId: DConversationId, chatExecuteMode: ChatExecuteMode, fragments: (DMessageContentFragment | DMessageAttachmentFragment)[], metadata?: DMessageMetadata) => boolean;
+  onConversationBeamEdit: (conversationId: DConversationId, editMessageId?: DMessageId) => Promise<void>;
+  onConversationsImportFromFiles: (files: File[]) => Promise<void>;
   onTextImagine: (conversationId: DConversationId, text: string) => void;
   setIsMulticast: (on: boolean) => void;
+  onComposerHasContent: (hasContent: boolean) => void;
   sx?: SxProps;
 }) {
 
   // state
-  const [chatModeId, setChatModeId] = React.useState<ChatModeId>('generate-text');
-  const [composeText, debouncedText, setComposeText] = useDebouncer('', 300, 1200, true);
+  const [composeText, setComposeText] = React.useState('');
+  const [drawRepeat, setDrawRepeat] = React.useState(1);
   const [micContinuation, setMicContinuation] = React.useState(false);
   const [speechInterimResult, setSpeechInterimResult] = React.useState<SpeechResult | null>(null);
-  const [isDragging, setIsDragging] = React.useState(false);
-  const [chatModeMenuAnchor, setChatModeMenuAnchor] = React.useState<HTMLAnchorElement | null>(null);
+  const [sendStarted, setSendStarted] = React.useState(false);
+  const {
+    chatExecuteMode,
+    chatExecuteModeSendColor, chatExecuteModeSendLabel,
+    chatExecuteMenuComponent, chatExecuteMenuShown, showChatExecuteMenu,
+  } = useChatExecuteMode(props.capabilityHasT2I, props.isMobile);
+  const [isMinimized, setIsMinimized] = React.useState(false);
+  const micCardRef = React.useRef<HTMLDivElement>(null);
 
   // external state
-  const { openPreferencesTab /*, setIsFocusedMode*/ } = useOptimaLayout();
-  const { labsAttachScreenCapture, labsCameraDesktop, labsShowCost } = useUXLabsStore(useShallow(state => ({
-    labsAttachScreenCapture: state.labsAttachScreenCapture,
-    labsCameraDesktop: state.labsCameraDesktop,
-    labsShowCost: state.labsShowCost,
+  const { showPromisedOverlay } = useOverlayComponents();
+  const { newChat: appChatNewChatIntent } = useRouterQuery<Partial<AppChatIntent>>();
+  const { labsComposerAttachmentsInline, labsShowShortcutBar } = useUXLabsStore(useShallow(state => ({
+    labsComposerAttachmentsInline: state.labsComposerAttachmentsInline,
+    labsShowShortcutBar: state.labsShowShortcutBar,
   })));
-  const timeToShowTips = useAppStateStore(state => state.usageCount > 2);
+  const timeToShowTips = useLogicSherpaStore(state => state.usageCount >= SHOW_TIPS_AFTER_RELOADS);
   const { novel: explainShiftEnter, touch: touchShiftEnter } = useUICounter('composer-shift-enter');
-  const { novel: explainAltEnter, touch: touchAltEnter } = useUICounter('composer-alt-enter');
-  const { novel: explainCtrlEnter, touch: touchCtrlEnter } = useUICounter('composer-ctrl-enter');
+
   const [startupText, setStartupText] = useComposerStartupText();
   const enterIsNewline = useUIPreferencesStore(state => state.enterIsNewline);
+  const composerQuickButton = useUIPreferencesStore(state => state.composerQuickButton);
   const chatMicTimeoutMs = useChatMicTimeoutMsValue();
-  const { assistantAbortible, systemPurposeId, tokenCount: _historyTokenCount, stopTyping } = useChatStore(useShallow(state => {
-    const conversation = state.conversations.find(_c => _c.id === props.conversationId);
+  const { assistantAbortible, systemPurposeId, tokenCount: _historyTokenCount, abortConversationTemp } = useChatStore(useShallow(state => {
+    const conversation = state.conversations.find(_c => _c.id === props.targetConversationId);
     return {
-      assistantAbortible: conversation ? !!conversation.abortController : false,
+      assistantAbortible: conversation ? !!conversation._abortController : false,
       systemPurposeId: conversation?.systemPurposeId ?? null,
       tokenCount: conversation ? conversation.tokenCount : 0,
-      stopTyping: state.stopTyping,
+      abortConversationTemp: state.abortConversationTemp,
     };
   }));
-  const { inComposer: browsingInComposer } = useBrowseCapability();
-  const { attachAppendClipboardItems, attachAppendDataTransfer, attachAppendEgoMessage, attachAppendFile, attachments: _attachments, clearAttachments, removeAttachment } =
-    useAttachments(browsingInComposer && !composeText.startsWith('/'));
 
   // external overlay state (extra conversationId-dependent state)
-  const conversationHandler = props.conversationId ? ConversationsManager.getHandler(props.conversationId) : null;
-  const conversationOverlayStore = conversationHandler?.getOverlayStore() ?? null;
-  const { replyToGenerateText } = useChatOverlayStore(conversationOverlayStore, useShallow(store => ({
-    replyToGenerateText: chatModeId === 'generate-text' ? store.replyToText?.trim() || null : null,
-  })));
+  const conversationOverlayStore = props.targetConversationId
+    ? ConversationsManager.getHandler(props.targetConversationId)?.conversationOverlayStore ?? null
+    : null;
+
+  // composer-overlay: for the in-reference-to state, comes from the conversation overlay
+  const allowInReferenceTo = chatExecuteMode === 'generate-content';
+  const inReferenceTo = useChatComposerOverlayStore(conversationOverlayStore, store => allowInReferenceTo ? store.inReferenceTo : null);
+
+  // LLM-derived
+  const noLLM = !props.chatLLM;
+  const chatLLMSupportsImages = !!props.chatLLM?.interfaces?.includes(LLM_IF_OAI_Vision);
+
+  // don't load URLs if the user is typing a command or there's no capability
+  const browseCapability = useBrowseCapability();
+  const enableLoadURLsInComposer = browseCapability.inComposer && !composeText.startsWith('/');
+
+  // user message for attachments
+  const { onConversationBeamEdit, onConversationsImportFromFiles } = props;
+  const handleFilterAGIFile = React.useCallback(async (file: File): Promise<boolean> =>
+    await showPromisedOverlay('composer-open-or-attach', { rejectWithValue: false }, ({ onResolve, onUserReject }) => (
+      <ConfirmationModal
+        open onClose={onUserReject}
+        onPositive={() => {
+          onConversationsImportFromFiles([file]);
+          onResolve(true);
+        }}
+        title='Open Conversation or Attach?'
+        positiveActionText='Open' negativeActionText='Attach'
+        confirmationText={`Would you like to open the conversation "${file.name}" or attach it to the message?`}
+      />
+    )), [onConversationsImportFromFiles, showPromisedOverlay]);
+
+  // attachments-overlay: comes from the attachments slice of the conversation overlay
+  const showChatAttachments = chatExecuteModeCanAttach(chatExecuteMode, props.capabilityHasT2IEdit);
+  const {
+    /* items */ attachmentDrafts,
+    /* append */ attachAppendClipboardItems, attachAppendCloudFile, attachAppendDataTransfer, attachAppendEgoFragments, attachAppendFile, attachAppendUrl,
+    /* take */ attachmentsRemoveAll, attachmentsTakeAllFragments, attachmentsTakeFragmentsByType,
+  } = useAttachmentDrafts(conversationOverlayStore, enableLoadURLsInComposer, chatLLMSupportsImages, handleFilterAGIFile, showChatAttachments === 'only-images');
+
+  // attachments derived state
+  const { enrichment: attEnrichment, summary: attEnrichSummary } = useAttachmentDraftsEnrichment(attachmentDrafts, props.chatLLM, chatLLMSupportsImages);
+
+  // drag/drop
+  const { dragContainerSx, dropComponent, handleContainerDragEnter, handleContainerDragStart } = useComposerDragDrop(!props.isMobile, attachAppendDataTransfer);
+
+  // ai functions
+  const agiAttachmentPrompts = useAgiAttachmentPrompts(useChatAutoSuggestAttachmentPrompts(), attachmentDrafts);
 
 
   // derived state
 
-  const isMobile = !!props.isMobile;
+  const { composerTextAreaRef, targetConversationId, onAction, onTextImagine } = props;
+  const isMobile = props.isMobile;
   const isDesktop = !props.isMobile;
-  const chatLLMId = props.chatLLM?.id || null;
+  const noConversation = !targetConversationId;
 
-  // attachments derived state
+  const composerTextSuffix = chatExecuteMode === 'generate-image' && isDesktop && drawRepeat > 1 ? ` x${drawRepeat}` : '';
 
-  const llmAttachments = useLLMAttachments(_attachments, chatLLMId);
+  const micIsRunning = !!speechInterimResult;
+  // more mic way below, as we use complex hooks
+
 
   // tokens derived state
 
-  const tokensComposerText = React.useMemo(() => {
-    if (!debouncedText || !chatLLMId)
-      return 0;
-    return countModelTokens(debouncedText, chatLLMId, 'composer text') ?? 0;
-  }, [chatLLMId, debouncedText]);
-  let tokensComposer = tokensComposerText + llmAttachments.tokenCountApprox;
-  if (tokensComposer > 0)
-    tokensComposer += 4; // every user message has this many surrounding tokens (note: shall depend on llm..)
+  const tokensComposerTextDebounced = useTextTokenCount(composeText, props.chatLLM, 800, 1600);
+  let tokensComposer = (tokensComposerTextDebounced ?? 0) + (attEnrichSummary.totalTokensApprox || 0);
+  if (props.chatLLM && tokensComposer > 0)
+    tokensComposer += glueForMessageTokens(props.chatLLM);
   const tokensHistory = _historyTokenCount;
-  const tokensReponseMax = (props.chatLLM?.options as LLMOptionsOpenAI /* FIXME: BIG ASSUMPTION */)?.llmResponseTokens || 0;
-  const tokenLimit = props.chatLLM?.contextTokens || 0;
-  const tokenPriceIn = props.chatLLM?.pricing?.chatIn;
-  const tokenPriceOut = props.chatLLM?.pricing?.chatOut;
+  const tokensResponseMax = getModelParameterValueWithFallback('llmResponseTokens', props.chatLLM?.initialParameters, props.chatLLM?.userParameters, 0) ?? 0 /* if null, assume 0*/;
+  const tokenLimit = getLLMContextTokens(props.chatLLM) ?? 0;
+  const tokenChatPricing = React.useMemo(() => llmChatPricing_adjusted(props.chatLLM), [props.chatLLM]);
 
 
-  // Effect: load initial text if queued up (e.g. by /link/share_targe)
+  // Effect: load initial text if queued up (e.g. by /link/share_targetF)
   React.useEffect(() => {
     if (startupText) {
       setStartupText(null);
@@ -185,186 +238,105 @@ export function Composer(props: {
     }
   }, [setComposeText, setStartupText, startupText]);
 
+  // Effect: notify the parent of presence/absence of content
+  const isContentful = composeText.length > 0 || !!attachmentDrafts.length;
+  const { onComposerHasContent } = props;
+  React.useEffect(() => {
+    onComposerHasContent?.(isContentful);
+  }, [isContentful, onComposerHasContent]);
+
 
   // Overlay actions
 
-  const handleReplyToCleared = React.useCallback(() => {
-    conversationOverlayStore?.getState().setReplyToText(null);
+  const handleRemoveInReferenceTo = React.useCallback((item: DMetaReferenceItem) => {
+    conversationOverlayStore?.getState().removeInReferenceTo(item);
+  }, [conversationOverlayStore]);
+
+  const handleInReferenceToClear = React.useCallback(() => {
+    conversationOverlayStore?.getState().clearInReferenceTo();
   }, [conversationOverlayStore]);
 
   React.useEffect(() => {
-    if (replyToGenerateText)
-      setTimeout(() => props.composerTextAreaRef.current?.focus(), 1 /* prevent focus theft */);
-  }, [replyToGenerateText, props.composerTextAreaRef]);
+    if (inReferenceTo?.length)
+      setTimeout(() => composerTextAreaRef.current?.focus(), 1 /* prevent focus theft */);
+  }, [composerTextAreaRef, inReferenceTo]);
+
+
+  // Confirmation Modals
+
+  const confirmProceedIfAttachmentsNotSupported = React.useCallback(async (): Promise<boolean> => {
+    if (attEnrichSummary.allCompatible) return true;
+    return await showPromisedOverlay('composer-unsupported-attachments', { rejectWithValue: false }, ({ onResolve, onUserReject }) => (
+      <ConfirmationModal
+        open
+        onClose={onUserReject}
+        onPositive={() => onResolve(true)}
+        confirmationText='Some attached files may not be fully compatible with the current AI model. This could affect processing. Would you like to review or proceed?'
+        positiveActionText='Proceed'
+        negativeActionText='Review Attachments'
+        title='Attachment Compatibility Notice'
+      />
+    ));
+  }, [attEnrichSummary.allCompatible, showPromisedOverlay]);
 
 
   // Primary button
 
-  const { conversationId, onAction } = props;
-
-  const handleSendAction = React.useCallback((_chatModeId: ChatModeId, composerText: string): boolean => {
-    if (!conversationId)
-      return false;
-
-    // get the multipart output including all attachments
-    const multiPartMessage = llmAttachments.collapseWithAttachments(composerText || null);
-    if (!multiPartMessage.length)
-      return false;
-
-    // metadata
-    const metadata = replyToGenerateText ? { inReplyToText: replyToGenerateText } : undefined;
-
-    // send the message
-    const enqueued = onAction(conversationId, _chatModeId, multiPartMessage, metadata);
-    if (enqueued) {
-      clearAttachments();
-      handleReplyToCleared();
-      setComposeText('');
-    }
-
-    return enqueued;
-  }, [clearAttachments, conversationId, handleReplyToCleared, llmAttachments, onAction, replyToGenerateText, setComposeText]);
-
-  const handleSendClicked = React.useCallback(() => {
-    handleSendAction(chatModeId, composeText);
-  }, [chatModeId, composeText, handleSendAction]);
-
-  const handleSendTextBeamClicked = React.useCallback(() => {
-    handleSendAction('generate-text-beam', composeText);
-  }, [composeText, handleSendAction]);
-
-  const handleStopClicked = React.useCallback(() => {
-    !!props.conversationId && stopTyping(props.conversationId);
-  }, [props.conversationId, stopTyping]);
-
-
-  // Secondary buttons
-
-  const handleCallClicked = React.useCallback(() => {
-    props.conversationId && systemPurposeId && launchAppCall(props.conversationId, systemPurposeId);
-  }, [props.conversationId, systemPurposeId]);
-
-  const handleDrawOptionsClicked = React.useCallback(() => {
-    openPreferencesTab(PreferencesTab.Draw);
-  }, [openPreferencesTab]);
-
-  const handleTextImagineClicked = React.useCallback(() => {
-    if (!composeText || !props.conversationId)
-      return;
-    props.onTextImagine(props.conversationId, composeText);
+  const _handleClearText = React.useCallback(() => {
     setComposeText('');
-  }, [composeText, props, setComposeText]);
+    attachmentsRemoveAll();
+    handleInReferenceToClear();
+  }, [attachmentsRemoveAll, handleInReferenceToClear, setComposeText]);
 
+  const _handleSendActionUnguarded = React.useCallback(async (_chatExecuteMode: ChatExecuteMode, composerText: string): Promise<boolean> => {
+    if (!isValidConversation(targetConversationId)) return false;
 
-  // Mode menu
+    // await user confirmation (or rejection) if attachments are not supported
+    if (!await confirmProceedIfAttachmentsNotSupported()) return false;
 
-  const handleModeSelectorHide = React.useCallback(() => {
-    setChatModeMenuAnchor(null);
-  }, []);
-
-  const handleModeSelectorShow = React.useCallback((event: React.MouseEvent<HTMLAnchorElement>) => {
-    setChatModeMenuAnchor(anchor => anchor ? null : event.currentTarget);
-  }, []);
-
-  const handleModeChange = React.useCallback((_chatModeId: ChatModeId) => {
-    handleModeSelectorHide();
-    setChatModeId(_chatModeId);
-  }, [handleModeSelectorHide]);
-
-
-  // Actiles
-
-  const onActileCommandPaste = React.useCallback((item: ActileItem) => {
-    if (props.composerTextAreaRef.current) {
-      const textArea = props.composerTextAreaRef.current;
-      const currentText = textArea.value;
-      const cursorPos = textArea.selectionStart;
-
-      // Find the position where the command starts
-      const commandStart = currentText.lastIndexOf('/', cursorPos);
-
-      // Construct the new text with the autocompleted command
-      const newText = currentText.substring(0, commandStart) + item.label + ' ' + currentText.substring(cursorPos);
-
-      // Update the text area with the new text
-      setComposeText(newText);
-
-      // Move the cursor to the end of the autocompleted command
-      const newCursorPos = commandStart + item.label.length + 1;
-      textArea.setSelectionRange(newCursorPos, newCursorPos);
-    }
-  }, [props.composerTextAreaRef, setComposeText]);
-
-  const onActileMessageAttach = React.useCallback((item: StarredMessageItem) => {
-    // get the message
-    const conversation = getConversation(item.conversationId);
-    const messageToAttach = conversation?.messages.find(m => m.id === item.messageId);
-    if (conversation && messageToAttach && messageToAttach.text) {
-      // Testing with this serialization for LLM. Note it will still be within a multi-part message,
-      // this could be in a titled markdown block. Don't know yet how this fares with different LLMs.
-      const chatTitle = conversationTitle(conversation);
-      const textPlain = `---\nitem id: ${messageToAttach.id}\ncontext title: ${chatTitle}\n---\n${messageToAttach.text.trim()}\n`;
-      void attachAppendEgoMessage('context-item', textPlain, `${chatTitle} > ${messageToAttach.text.slice(0, 10)}...`);
-    }
-  }, [attachAppendEgoMessage]);
-
-  const actileProviders = React.useMemo(() => {
-    return [providerCommands(onActileCommandPaste), providerStarredMessage(onActileMessageAttach)];
-  }, [onActileCommandPaste, onActileMessageAttach]);
-
-  const { actileComponent, actileInterceptKeydown, actileInterceptTextChange } = useActileManager(actileProviders, props.composerTextAreaRef);
-
-
-  // Text typing
-
-  const handleTextareaTextChange = React.useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setComposeText(e.target.value);
-    isMobile && actileInterceptTextChange(e.target.value);
-  }, [actileInterceptTextChange, isMobile, setComposeText]);
-
-  const handleTextareaKeyDown = React.useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // disable keyboard handling if the actile is visible
-    if (actileInterceptKeydown(e))
-      return;
-
-    // Enter: primary action
-    if (e.key === 'Enter') {
-
-      // Alt (Windows) or Option (Mac) + Enter: append the message instead of sending it
-      if (e.altKey) {
-        if (handleSendAction('append-user', composeText))
-          touchAltEnter();
-        return e.preventDefault();
-      }
-
-      // Ctrl (Windows) or Command (Mac) + Enter: send for beaming
-      if ((isMacUser && e.metaKey && !e.ctrlKey) || (!isMacUser && e.ctrlKey && !e.metaKey)) {
-        if (handleSendAction('generate-text-beam', composeText))
-          touchCtrlEnter();
-        return e.preventDefault();
-      }
-
-      // Shift: toggles the 'enter is newline'
-      if (e.shiftKey)
-        touchShiftEnter();
-      if (enterIsNewline ? e.shiftKey : !e.shiftKey) {
-        if (!assistantAbortible)
-          handleSendAction(chatModeId, composeText);
-        return e.preventDefault();
-      }
+    // validate some chat mode inputs
+    const isDraw = _chatExecuteMode === 'generate-image';
+    const isBlank = !composerText.trim();
+    if (isDraw && isBlank) {
+      addSnackbar({ key: 'chat-draw-empty', message: 'Please enter a description to generate an image.', type: 'info' });
+      return false;
     }
 
-  }, [actileInterceptKeydown, assistantAbortible, chatModeId, composeText, enterIsNewline, handleSendAction, touchAltEnter, touchCtrlEnter, touchShiftEnter]);
+    // prepare the fragments: content (if any) and attachments (if allowed, and any)
+    const fragments: (DMessageContentFragment | DMessageAttachmentFragment)[] = [];
+    if (composerText)
+      fragments.push(createTextContentFragment(composerText + composerTextSuffix));
+
+    const canAttach = chatExecuteModeCanAttach(_chatExecuteMode, props.capabilityHasT2IEdit);
+    if (canAttach) {
+      const attachmentFragments = await attachmentsTakeAllFragments('global', 'app-chat');
+      fragments.push(...attachmentFragments);
+    }
+
+    if (!fragments.length) {
+      // addSnackbar({ key: 'chat-composer-empty', message: 'Please enter a message or attach files.', type: 'info' });
+      return false;
+    }
+
+    // prepare the metadata
+    const metadata = inReferenceTo?.length ? { inReferenceTo: inReferenceTo } : undefined;
+
+    // send the message - NOTE: if successful, the ownership of the fragments is transferred to the receiver, so we just clear them
+    const enqueued = onAction(targetConversationId, _chatExecuteMode, fragments, metadata);
+    if (enqueued)
+      _handleClearText();
+    return enqueued;
+  }, [targetConversationId, confirmProceedIfAttachmentsNotSupported, composerTextSuffix, props.capabilityHasT2IEdit, inReferenceTo, onAction, _handleClearText, attachmentsTakeAllFragments]);
+
+  const handleSendAction = React.useCallback(async (chatExecuteMode: ChatExecuteMode, composerText: string): Promise<boolean> => {
+    setSendStarted(true);
+    const enqueued = await _handleSendActionUnguarded(chatExecuteMode, composerText);
+    setSendStarted(false);
+    return enqueued;
+  }, [_handleSendActionUnguarded, setSendStarted]);
 
 
-  // Focus mode
-
-  // const handleFocusModeOn = React.useCallback(() => setIsFocusedMode(true), [setIsFocusedMode]);
-
-  // const handleFocusModeOff = React.useCallback(() => setIsFocusedMode(false), [setIsFocusedMode]);
-
-
-  // Mic typing & continuation mode
+  // Mic typing & continuation mode - NOTE: this is here because needs the handleSendAction, and provides recognitionState
 
   const onSpeechResultCallback = React.useCallback((result: SpeechResult) => {
     // not done: show interim
@@ -380,37 +352,44 @@ export function Composer(props: {
     nextText = nextText ? nextText + ' ' + transcript : transcript;
 
     // auto-send (mic continuation mode) if requested
-    const autoSend = micContinuation && nextText.length >= 1 && !!props.conversationId; //&& assistantAbortible;
+    const autoSend = (result.flagSendOnDone || micContinuation) && nextText.length >= 1 && !noConversation; //&& assistantAbortible;
     const notUserStop = result.doneReason !== 'manual';
     if (autoSend) {
-      if (notUserStop)
-        playSoundUrl('/sounds/mic-off-mid.mp3');
-      handleSendAction(chatModeId, nextText);
+      // if (notUserStop) {
+      void AudioGenerator.chatAutoSend();
+      // void AudioPlayer.playUrl('/sounds/mic-off-mid.mp3');
+      // }
+      void handleSendAction(chatExecuteMode, nextText); // fire/forget
     } else {
+      // if scheduled for send but not sent, clear the send state
+      if (result.flagSendOnDone)
+        setSendStarted(false);
+
+      // mic off sound
       if (!micContinuation && notUserStop)
-        playSoundUrl('/sounds/mic-off-mid.mp3');
+        void AudioPlayer.playUrl('/sounds/mic-off-mid.mp3').catch(() => {
+          // This happens on Is.Browser.Safari, where the audio is not allowed to play without user interaction
+        });
+
+      // update with the spoken text
       if (nextText) {
-        props.composerTextAreaRef.current?.focus();
+        composerTextAreaRef.current?.focus();
         setComposeText(nextText);
       }
     }
-  }, [chatModeId, composeText, handleSendAction, micContinuation, props.composerTextAreaRef, props.conversationId, setComposeText]);
+  }, [chatExecuteMode, composeText, composerTextAreaRef, handleSendAction, micContinuation, noConversation, setComposeText]);
 
-  const { isSpeechEnabled, isSpeechError, isRecordingAudio, isRecordingSpeech, toggleRecording } =
-    useSpeechRecognition(onSpeechResultCallback, chatMicTimeoutMs || 2000);
+  const { recognitionState, toggleRecognition } = useSpeechRecognition('webSpeechApi', onSpeechResultCallback, chatMicTimeoutMs || 2000);
 
-  useGlobalShortcuts([['m', true, false, false, toggleRecording]]);
-
-  const micIsRunning = !!speechInterimResult;
-  const micContinuationTrigger = micContinuation && !micIsRunning && !assistantAbortible && !isSpeechError;
-  const micColor: ColorPaletteProp = isSpeechError ? 'danger' : isRecordingSpeech ? 'primary' : isRecordingAudio ? 'primary' : 'neutral';
-  const micVariant: VariantProp = isRecordingSpeech ? 'solid' : isRecordingAudio ? 'soft' : 'soft';  //(isDesktop ? 'soft' : 'plain');
+  const micContinuationTrigger = micContinuation && !micIsRunning && !assistantAbortible && !recognitionState.errorMessage;
+  const micColor: ColorPaletteProp = recognitionState.errorMessage ? 'danger' : recognitionState.isActive ? 'primary' : recognitionState.hasAudio ? 'primary' : 'neutral';
+  const micVariant: VariantProp = recognitionState.hasSpeech ? 'solid' : recognitionState.hasAudio ? 'soft' : 'soft';  //(isDesktop ? 'soft' : 'plain');
 
   const handleToggleMic = React.useCallback(() => {
     if (micIsRunning && micContinuation)
       setMicContinuation(false);
-    toggleRecording();
-  }, [micContinuation, micIsRunning, toggleRecording]);
+    toggleRecognition();
+  }, [micContinuation, micIsRunning, toggleRecognition]);
 
   const handleToggleMicContinuation = React.useCallback(() => {
     setMicContinuation(continued => !continued);
@@ -419,472 +398,692 @@ export function Composer(props: {
   React.useEffect(() => {
     // autostart the microphone if the assistant stopped typing
     if (micContinuationTrigger)
-      toggleRecording();
-  }, [toggleRecording, micContinuationTrigger]);
+      toggleRecognition();
+  }, [toggleRecognition, micContinuationTrigger]);
 
-
-  // Attachments
-
-  const handleAttachCtrlV = React.useCallback((event: React.ClipboardEvent) => {
-    if (attachAppendDataTransfer(event.clipboardData, 'paste', false) === 'as_files')
-      event.preventDefault();
-  }, [attachAppendDataTransfer]);
-
-  const handleAttachCameraImage = React.useCallback((file: FileWithHandle) => {
-    void attachAppendFile('camera', file);
-  }, [attachAppendFile]);
-
-  const handleAttachScreenCapture = React.useCallback((file: File) => {
-    void attachAppendFile('screencapture', file);
-  }, [attachAppendFile]);
-
-  const { openCamera, cameraCaptureComponent } = useCameraCaptureModal(handleAttachCameraImage);
-
-  const handleAttachFilePicker = React.useCallback(async () => {
-    try {
-      const selectedFiles: FileWithHandle[] = await fileOpen({ multiple: true });
-      selectedFiles.forEach(file =>
-        void attachAppendFile('file-open', file),
-      );
-    } catch (error) {
-      // ignore...
-    }
-  }, [attachAppendFile]);
-
-  useGlobalShortcuts([[supportsClipboardRead ? 'v' : false, true, true, false, attachAppendClipboardItems]]);
-
-  const handleAttachmentInlineText = React.useCallback((attachmentId: AttachmentId) => {
-    setComposeText(currentText => {
-      const inlinedMultiPart = llmAttachments.collapseWithAttachment(currentText, attachmentId);
-      const inlinedText = getSingleTextBlockText(inlinedMultiPart) || '';
-      removeAttachment(attachmentId);
-      return inlinedText;
+  React.useEffect(() => {
+    // auto-scroll the mic card to the bottom
+    micCardRef.current?.scrollTo({
+      top: micCardRef.current.scrollHeight,
+      behavior: 'smooth',
     });
-  }, [llmAttachments, removeAttachment, setComposeText]);
+  }, [speechInterimResult]);
 
-  const handleAttachmentsInlineText = React.useCallback(() => {
-    setComposeText(currentText => {
-      const inlinedMultiPart = llmAttachments.collapseWithAttachments(currentText);
-      const inlinedText = getSingleTextBlockText(inlinedMultiPart) || '';
-      clearAttachments();
-      return inlinedText;
-    });
-  }, [clearAttachments, llmAttachments, setComposeText]);
-
-
-  // Drag & Drop
-
-  const eatDragEvent = React.useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-  }, []);
-
-  const handleTextareaDragEnter = React.useCallback((e: React.DragEvent) => {
-    const isFromSelf = e.dataTransfer.types.includes('x-app/agi');
-    if (!isFromSelf) {
-      eatDragEvent(e);
-      setIsDragging(true);
+  React.useEffect(() => {
+    // auto-start the microphone if appChat was created with a particular intent
+    if (appChatNewChatIntent === 'voiceInput') {
+      toggleRecognition();
+      void removeQueryParam('newChat');
     }
-  }, [eatDragEvent]);
-
-  const handleTextareaDragStart = React.useCallback((e: React.DragEvent) => {
-    e.dataTransfer.setData('x-app/agi', 'do-not-intercept');
-  }, []);
-
-  const handleOverlayDragLeave = React.useCallback((e: React.DragEvent) => {
-    eatDragEvent(e);
-    setIsDragging(false);
-  }, [eatDragEvent]);
-
-  const handleOverlayDragOver = React.useCallback((e: React.DragEvent) => {
-    eatDragEvent(e);
-    // this makes sure we don't "transfer" (or move) the attachment, but we tell the sender we'll copy it
-    e.dataTransfer.dropEffect = 'copy';
-  }, [eatDragEvent]);
-
-  const handleOverlayDrop = React.useCallback(async (event: React.DragEvent) => {
-    eatDragEvent(event);
-    setIsDragging(false);
-
-    // VSCode: detect failure of dropping from VSCode, details below:
-    //         https://github.com/microsoft/vscode/issues/98629#issuecomment-634475572
-    const { dataTransfer } = event;
-    if (dataTransfer.types.includes('codeeditors'))
-      return setComposeText(test => test + 'Dragging files from VSCode is not supported! Fixme: anyone?');
-
-    // textarea drop
-    attachAppendDataTransfer(dataTransfer, 'drop', true);
-  }, [attachAppendDataTransfer, eatDragEvent, setComposeText]);
+  }, [appChatNewChatIntent, toggleRecognition]);
 
 
-  const isText = chatModeId === 'generate-text';
-  const isTextBeam = chatModeId === 'generate-text-beam';
-  const isAppend = chatModeId === 'append-user';
-  const isReAct = chatModeId === 'generate-react';
-  const isDraw = chatModeId === 'generate-image';
+  // Other send actins
 
-  const showChatReplyTo = !!replyToGenerateText;
-  const showChatExtras = isText && !showChatReplyTo;
+  const handleAppendTextAndSend = React.useCallback(async (appendText: string) => {
+    const newText = composeText ? `${composeText} ${appendText}` : appendText;
+    setComposeText(newText);
+    await handleSendAction(chatExecuteMode, newText);
+  }, [chatExecuteMode, composeText, handleSendAction, setComposeText]);
 
-  const buttonVariant: VariantProp = (isAppend || (isMobile && isTextBeam)) ? 'outlined' : 'solid';
+  const handleFinishMicAndSend = React.useCallback(() => {
+    if (!sendStarted) {
+      setSendStarted(true);
+      toggleRecognition(true);
+    }
+  }, [sendStarted, toggleRecognition]);
 
-  const buttonColor: ColorPaletteProp =
+  const handleSendClicked = React.useCallback(async () => {
+    // Auto-send as soon as the mic is done
+    if (recognitionState.isActive) {
+      handleFinishMicAndSend();
+      return;
+    }
+    // Safety option
+    if (micIsRunning) {
+      addSnackbar({ key: 'chat-mic-running', message: 'Please wait for the microphone to finish.', type: 'info' });
+      return;
+    }
+    await handleSendAction(chatExecuteMode, composeText); // 'chat/write/...' button
+  }, [chatExecuteMode, composeText, handleFinishMicAndSend, handleSendAction, micIsRunning, recognitionState.isActive]);
+
+  const handleSendTextBeamClicked = React.useCallback(async () => {
+    if (micIsRunning) {
+      addSnackbar({ key: 'chat-mic-running', message: 'Please wait for the microphone to finish.', type: 'info' });
+      return;
+    }
+    if (composeText) {
+      await handleSendAction('beam-content', composeText); // 'beam' button
+    } else {
+      if (targetConversationId)
+        void onConversationBeamEdit(targetConversationId); // beam-edit conversation
+    }
+  }, [composeText, handleSendAction, micIsRunning, onConversationBeamEdit, targetConversationId]);
+
+  const handleStopClicked = React.useCallback(() => {
+    targetConversationId && abortConversationTemp(targetConversationId);
+  }, [abortConversationTemp, targetConversationId]);
+
+
+  // Secondary buttons
+
+  const handleCallClicked = React.useCallback(() => {
+    targetConversationId && systemPurposeId && launchAppCall(targetConversationId, systemPurposeId);
+  }, [systemPurposeId, targetConversationId]);
+
+  const handleDrawOptionsClicked = React.useCallback(() => optimaOpenPreferences('draw'), []);
+
+  const handleTextImagineClicked = React.useCallback(() => {
+    if (!composeText || !targetConversationId) return;
+    onTextImagine(targetConversationId, composeText);
+    setComposeText('');
+  }, [composeText, onTextImagine, setComposeText, targetConversationId]);
+
+
+  // Actiles
+
+  const onActileCommandPaste = React.useCallback(({ label }: ActileItem, searchPrefix: string) => {
+    if (composerTextAreaRef.current) {
+      const textArea = composerTextAreaRef.current;
+      const currentText = textArea.value;
+      const cursorPos = textArea.selectionStart;
+
+      // Find the position where the command starts
+      const commandStart = currentText.lastIndexOf(searchPrefix, cursorPos);
+
+      // Construct the new text with the autocompleted command
+      setComposeText((prevText) => prevText.substring(0, commandStart) + label + ' ' + prevText.substring(cursorPos));
+
+      // Schedule setting the cursor position after the state update
+      const newCursorPos = commandStart + label.length + 1;
+      setTimeout(() => composerTextAreaRef.current?.setSelectionRange(newCursorPos, newCursorPos), 0);
+    }
+  }, [composerTextAreaRef, setComposeText]);
+
+  const onActileEmbedMessage = React.useCallback(async ({ conversationId, messageId }: StarredMessageItem) => {
+    // get the message
+    const cHandler = ConversationsManager.getHandler(conversationId);
+    const messageToEmbed = cHandler.historyFindMessageOrThrow(messageId);
+    if (messageToEmbed) {
+      const fragmentsCopy = duplicateDMessageFragments(messageToEmbed.fragments, true); // [attach] deep copy a message's fragments to attach to ego
+      if (fragmentsCopy.length) {
+        const chatTitle = cHandler.title() ?? '';
+        const messageText = messageFragmentsReduceText(fragmentsCopy);
+        const label = `${chatTitle} > ${messageText.slice(0, 10)}...`;
+        await attachAppendEgoFragments(fragmentsCopy, label, chatTitle, conversationId, messageId);
+      }
+    }
+  }, [attachAppendEgoFragments]);
+
+
+  const actileProviders = React.useMemo(() => [
+    providerAttachmentLabels(conversationOverlayStore, onActileCommandPaste),
+    providerCommands(onActileCommandPaste),
+    providerStarredMessages(onActileEmbedMessage),
+  ], [conversationOverlayStore, onActileCommandPaste, onActileEmbedMessage]);
+
+  const { actileComponent, actileInterceptKeydown, actileInterceptTextChange } = useActileManager(actileProviders, composerTextAreaRef);
+
+
+  // Type...
+
+  const handleTextareaTextChange = React.useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setComposeText(e.target.value);
+    isMobile && actileInterceptTextChange(e.target.value);
+  }, [actileInterceptTextChange, isMobile, setComposeText]);
+
+  const handleTextareaKeyDown = React.useCallback(async (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // disable keyboard handling if the actile is visible
+    if (actileInterceptKeydown(e))
+      return;
+
+    // Enter: primary action
+    if (e.key === 'Enter') {
+      // Skip if composing (e.g., CJK input methods) - issue #784
+      if (e.nativeEvent.isComposing)
+        return;
+
+      // Alt (Windows) or Option (Mac) + Enter: append the message instead of sending it
+      if (e.altKey && !e.metaKey && !e.ctrlKey) {
+        if (await handleSendAction('append-user', composeText)) // 'alt+enter' -> write
+          e.stopPropagation();
+        return e.preventDefault();
+      }
+
+      // Ctrl (Windows) or Command (Mac) + Enter: send for beaming
+      if (e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (await handleSendAction('beam-content', composeText)) // 'ctrl+enter' -> beam
+          e.stopPropagation();
+        return e.preventDefault();
+      }
+
+      // Shift: toggles the 'enter is newline'
+      if (e.shiftKey)
+        touchShiftEnter();
+      if (enterIsNewline ? e.shiftKey : !e.shiftKey) {
+        if (!assistantAbortible)
+          await handleSendAction(chatExecuteMode, composeText); // enter -> send
+        return e.preventDefault();
+      }
+    }
+
+  }, [actileInterceptKeydown, assistantAbortible, chatExecuteMode, composeText, enterIsNewline, handleSendAction, touchShiftEnter]);
+
+
+  // Focus mode
+
+  // const handleFocusModeOn = React.useCallback(() => setIsFocusedMode(true), [setIsFocusedMode]);
+
+  // const handleFocusModeOff = React.useCallback(() => setIsFocusedMode(false), [setIsFocusedMode]);
+
+  // useMediaSessionCallbacks({ play: toggleRecognition, pause: toggleRecognition });
+
+
+  // Minimize
+
+  const handleToggleMinimized = React.useCallback(() => setIsMinimized(hide => !hide), []);
+
+
+  // Attachments Up
+
+  const handleAttachCtrlV = useAttachHandler_PasteIntercept(attachAppendDataTransfer);
+  const handleAttachFiles = useAttachHandler_Files(attachAppendFile);
+  const handleOpenCamera = useAttachHandler_CameraOpen(attachAppendFile);
+  const handleAttachScreenCapture = useAttachHandler_ScreenCapture(attachAppendFile);
+  const { openWebInputDialog, webInputDialogComponent } = useAttachHandler_UrlWebLinks(attachAppendUrl, composeText);
+  const { openGoogleDrivePicker, googleDrivePickerComponent } = useGoogleDrivePicker(attachAppendCloudFile, isMobile);
+
+
+  // Attachments Down
+
+  const handleAttachmentDraftsAction = React.useCallback((attachmentDraftIdOrAll: AttachmentDraftId | null, action: AttachmentDraftsAction) => {
+    switch (action) {
+      case 'copy-text':
+        const copyFragments = attachmentsTakeFragmentsByType('doc', attachmentDraftIdOrAll, false);
+        const copyString = marshallWrapDocFragments(null, copyFragments, false, '\n\n---\n\n');
+        copyToClipboard(copyString, attachmentDraftIdOrAll ? 'Attachment Text' : 'Attachments Text');
+        break;
+      case 'inline-text':
+        const inlineFragments = attachmentsTakeFragmentsByType('doc', attachmentDraftIdOrAll, true);
+        setComposeText(currentText => marshallWrapDocFragments(currentText, inlineFragments, 'markdown-code', '\n\n'));
+        break;
+    }
+  }, [attachmentsTakeFragmentsByType, setComposeText]);
+
+
+  // Keyboard Shortcuts
+
+  useGlobalShortcuts('ChatComposer.Gen', React.useMemo(() => [
+    ...(assistantAbortible ? [{ key: ShortcutKey.Esc, action: handleStopClicked, description: 'Stop response', level: 2 }] : []),
+  ], [assistantAbortible, handleStopClicked]));
+
+  useGlobalShortcuts('ChatComposer', React.useMemo(() => {
+    const composerShortcuts: ShortcutObject[] = [];
+    if (showChatAttachments) {
+      composerShortcuts.push({ key: 'f', ctrl: true, shift: true, action: () => openFileForAttaching(true, handleAttachFiles), description: 'Attach File' });
+      composerShortcuts.push({ key: 'l', ctrl: true, shift: true, action: openWebInputDialog, description: 'Attach Link' });
+      if (supportsClipboardRead())
+        composerShortcuts.push({ key: 'v', ctrl: true, shift: true, action: attachAppendClipboardItems, description: 'Attach Clipboard' });
+      // Future: keep reactive state here to support Live Screen Capture and more
+      // if (supportsScreenCapture)
+      //   composerShortcuts.push({ key: 's', ctrl: true, shift: true, action: openScreenCaptureDialog, description: 'Attach Screen Capture' });
+    }
+    if (recognitionState.isActive) {
+      composerShortcuts.push({ key: 'm', ctrl: true, action: handleFinishMicAndSend, description: 'Mic · Send', disabled: !recognitionState.hasSpeech || sendStarted, endDecoratorIcon: TelegramIcon as any, level: 4 });
+      composerShortcuts.push({
+        key: ShortcutKey.Esc, action: () => {
+          setMicContinuation(false);
+          toggleRecognition(false);
+        }, description: 'Mic · Stop', level: 4,
+      });
+    } else if (browserSpeechRecognitionCapability().mayWork)
+      composerShortcuts.push({
+        key: 'm', ctrl: true, action: () => {
+          // steal focus from the textarea, in case it has - so that enter cannot work against us
+          (document.activeElement as HTMLElement)?.blur?.();
+          toggleRecognition(false);
+        }, description: 'Microphone',
+      });
+    return composerShortcuts;
+  }, [attachAppendClipboardItems, handleAttachFiles, handleFinishMicAndSend, openWebInputDialog, recognitionState.hasSpeech, recognitionState.isActive, sendStarted, showChatAttachments, toggleRecognition]));
+
+
+  // ...
+
+  const isText = chatExecuteMode === 'generate-content';
+  const isTextBeam = chatExecuteMode === 'beam-content';
+  const isAppend = chatExecuteMode === 'append-user';
+  const isReAct = chatExecuteMode === 'react-content';
+  const isDraw = chatExecuteMode === 'generate-image';
+
+  const showChatInReferenceTo = !!inReferenceTo?.length;
+  const showChatExtras = isText && !showChatInReferenceTo && !assistantAbortible && composerQuickButton !== 'off';
+  const speechMayWork = browserSpeechRecognitionCapability().mayWork;
+
+  const sendButtonVariant: VariantProp = (isAppend || (isMobile && isTextBeam)) ? 'outlined' : 'solid';
+
+  const sendButtonColor: ColorPaletteProp =
     assistantAbortible ? 'warning'
-      : isReAct ? 'success'
-        : isTextBeam ? 'primary'
-          : isDraw ? 'warning'
-            : 'primary';
+      : !attEnrichSummary.allCompatible ? 'warning'
+        : chatExecuteModeSendColor;
 
-  const buttonText =
-    isAppend ? 'Write'
-      : isReAct ? 'ReAct'
-        : isTextBeam ? 'Beam'
-          : isDraw ? 'Draw'
-            : 'Chat';
+  const sendButtonLabel = chatExecuteModeSendLabel;
 
-  const buttonIcon =
-    micContinuation ? <AutoModeIcon />
+  const sendButtonIcon =
+    micContinuation ? null
       : isAppend ? <SendIcon sx={{ fontSize: 18 }} />
         : isReAct ? <PsychologyIcon />
           : isTextBeam ? <ChatBeamIcon /> /* <GavelIcon /> */
-            : isDraw ? <FormatPaintTwoToneIcon />
+            : isDraw ? <PhPaintBrush />
               : <TelegramIcon />;
 
+  const beamButtonColor: ColorPaletteProp | undefined =
+    !attEnrichSummary.allCompatible ? 'warning'
+      : undefined;
+
+  const showTint: ColorPaletteProp | undefined = isDraw ? 'warning' : isReAct ? 'success' : undefined;
+
+  // stable randomization of the /verb, between '/draw', '/react'
+  const placeholderAction = React.useMemo(() => {
+    const actions: string[] = ['/react'];
+    if (props.capabilityHasT2I) actions.push('/draw');
+    return actions[Math.floor(Math.random() * actions.length)];
+  }, [props.capabilityHasT2I]);
+
   let textPlaceholder: string =
-    isDraw ? 'Describe an idea or a drawing...'
-      : isReAct ? 'Multi-step reasoning question...'
-        : isTextBeam ? 'Beam: combine the smarts of models...'
-          : showChatReplyTo ? 'Chat about this'
-            : props.isDeveloperMode ? 'Chat with me' + (isDesktop ? ' · drop source' : '') + ' · attach code...'
-              : props.capabilityHasT2I ? 'Chat · /beam · /draw · drop files...'
-                : 'Chat · /react · drop files...';
-  if (isDesktop && timeToShowTips) {
+    isDraw ? 'Describe what you would like to see...'
+      : isReAct ? 'Ask a multi-step reasoning question...'
+        : isTextBeam ? 'Combine insights from multiple AI models...'
+          : showChatInReferenceTo ? 'Chat about this...'
+            : 'Type'
+            + (props.isDeveloperMode ? ' · attach code' : '')
+            + (isDesktop ? ` · drop ${props.isDeveloperMode ? 'source' : 'files'}` : '')
+            + ` · ${placeholderAction}`
+            + (recognitionState.isAvailable ? ' · ramble' : '')
+            + '...';
+
+  if (isDesktop && timeToShowTips && !isDraw) {
     if (explainShiftEnter)
-      textPlaceholder += !enterIsNewline ? '\n\n💡 Shift + Enter to add a new line' : '\n\n💡 Shift + Enter to send';
-    else if (explainAltEnter)
-      textPlaceholder += platformAwareKeystrokes('\n\n💡 Tip: Alt + Enter to just append the message');
-    else if (explainCtrlEnter)
-      textPlaceholder += platformAwareKeystrokes('\n\n💡 Tip: Ctrl + Enter to beam');
+      textPlaceholder += !enterIsNewline ? '\n\n⏎ Shift + Enter to add a new line' : '\n\n➤ Shift + Enter to send';
   }
 
+  const stableGridSx: SxProps = React.useMemo(() => ({
+    // basically a position:relative to enable the inner drop area
+    ...dragContainerSx,
+    // This used to be in the outer box, but we put it here instead
+    // p: { xs: 1, md: 2 },
+  }), [dragContainerSx]);
+
   return (
-    <Box aria-label='User Message' component='section' sx={props.sx}>
-      <Grid container spacing={{ xs: 1, md: 2 }}>
+    <Box
+      aria-label='New Message'
+      component='section'
+      bgcolor={showTint ? `var(--joy-palette-${showTint}-softBg)` : themeBgAppChatComposer}
+      sx={props.sx}
+    >
 
-        <Grid xs={12} md={9}><Box sx={{ display: 'flex', gap: { xs: 1, md: 2 }, alignItems: 'flex-start' }}>
+      {!isMobile && labsShowShortcutBar && <StatusBarMemo toggleMinimized={handleToggleMinimized} isMinimized={isMinimized} />}
 
-          {/* Start buttons column */}
-          <Box sx={{
-            flexGrow: 0,
-            display: 'grid', gap: 1,
-          }}>
-            {isMobile ? <>
+      {/* This container is here just to let the potential statusbar fill the whole space, so we moved the padding here and not in the parent */}
+      <Box sx={(!isMinimized || isMobile || !labsShowShortcutBar) ? paddingBoxSx : minimizedSx}>
 
-              {/* [mobile] Mic button */}
-              {isSpeechEnabled && <ButtonMicMemo variant={micVariant} color={micColor} onClick={handleToggleMic} />}
+        <Grid
+          container
+          onDragEnter={handleContainerDragEnter}
+          onDragStart={handleContainerDragStart}
+          spacing={{ xs: 1, md: 2 }}
+          sx={stableGridSx}
+        >
 
-              {/* [mobile] [+] button */}
-              <Dropdown>
-                <MenuButton slots={{ root: IconButton }}>
-                  <AddCircleOutlineIcon />
-                </MenuButton>
-                <Menu>
-                  {/* Responsive Camera OCR button */}
-                  <MenuItem>
-                    <ButtonAttachCameraMemo onOpenCamera={openCamera} />
-                  </MenuItem>
+          {/* [Mobile: top, Desktop: left] */}
+          <Grid xs={12} md={9}><Box sx={{ display: 'flex', gap: { xs: 1, md: 2 }, alignItems: 'stretch' }}>
 
-                  {/* Responsive Open Files button */}
-                  <MenuItem>
-                    <ButtonAttachFileMemo onAttachFilePicker={handleAttachFilePicker} />
-                  </MenuItem>
+            {/* [Mobile, Col1] Mic, Insert Multi-modal content, and Broadcast buttons */}
+            {isMobile && (
+              <Box sx={{ flexGrow: 0, display: 'grid', gap: 1, alignSelf: 'flex-start' }}>
 
-                  {/* Responsive Paste button */}
-                  {supportsClipboardRead && <MenuItem>
-                    <ButtonAttachClipboardMemo onClick={attachAppendClipboardItems} />
-                  </MenuItem>}
-                </Menu>
-              </Dropdown>
+                {/* [mobile] Mic button */}
+                {recognitionState.isAvailable && <ButtonMicMemo variant={micVariant} color={micColor === 'danger' ? 'danger' : showTint || micColor} errorMessage={recognitionState.errorMessage} onClick={handleToggleMic} />}
 
-              {/* [Mobile] MultiChat button */}
-              {props.isMulticast !== null && <ButtonMultiChatMemo isMobile multiChat={props.isMulticast} onSetMultiChat={props.setIsMulticast} />}
+                {/* [mobile] Attach file button (in draw with image mode)  */}
+                {showChatAttachments === 'only-images' && <ButtonAttachFilesMemo color={showTint} isMobile onAttachFiles={handleAttachFiles} multiple />}
 
-            </> : <>
-
-              {/*<FormHelperText sx={{ mx: 'auto' }}>*/}
-              {/*  Attach*/}
-              {/*</FormHelperText>*/}
-
-              {/* Responsive Open Files button */}
-              <ButtonAttachFileMemo onAttachFilePicker={handleAttachFilePicker} />
-
-              {/* Responsive Paste button */}
-              {supportsClipboardRead && <ButtonAttachClipboardMemo onClick={attachAppendClipboardItems} />}
-
-              {/* Responsive Screen Capture button */}
-              {labsAttachScreenCapture && supportsScreenCapture && <ButtonAttachScreenCaptureMemo onAttachScreenCapture={handleAttachScreenCapture} />}
-
-              {/* Responsive Camera OCR button */}
-              {labsCameraDesktop && <ButtonAttachCameraMemo onOpenCamera={openCamera} />}
-
-            </>}
-          </Box>
-
-          {/* [ Textarea + Overlays + Mic | Attachments ] */}
-          <Box sx={{
-            flexGrow: 1,
-            // layout
-            display: 'flex', flexDirection: 'column', gap: 1,
-            minWidth: 200, // flex: enable X-scrolling (resetting any possible minWidth due to the attachments)
-          }}>
-
-            {/* Textarea + Mic buttons + Mic/Drag overlay */}
-            <Box sx={{ position: 'relative' }}>
-
-              {/* Edit box with inner Token Progress bar */}
-              <Box sx={{ position: 'relative' }}>
-
-                <Textarea
-                  variant='outlined'
-                  color={isDraw ? 'warning' : isReAct ? 'success' : undefined}
-                  autoFocus
-                  minRows={isMobile ? 4 : showChatReplyTo ? 4 : 5}
-                  maxRows={isMobile ? 8 : 10}
-                  placeholder={textPlaceholder}
-                  value={composeText}
-                  onChange={handleTextareaTextChange}
-                  onDragEnter={handleTextareaDragEnter}
-                  onDragStart={handleTextareaDragStart}
-                  onKeyDown={handleTextareaKeyDown}
-                  onPasteCapture={handleAttachCtrlV}
-                  // onFocusCapture={handleFocusModeOn}
-                  // onBlurCapture={handleFocusModeOff}
-                  endDecorator={showChatReplyTo && <ReplyToBubble replyToText={replyToGenerateText} onClear={handleReplyToCleared} className='reply-to-bubble' />}
-                  slotProps={{
-                    textarea: {
-                      enterKeyHint: enterIsNewline ? 'enter' : 'send',
-                      sx: {
-                        ...(isSpeechEnabled && { pr: { md: 5 } }),
-                        // mb: 0.5, // no need; the outer container already has enough p (for TokenProgressbar)
-                      },
-                      ref: props.composerTextAreaRef,
-                    },
-                  }}
-                  sx={{
-                    backgroundColor: 'background.level1',
-                    '&:focus-within': { backgroundColor: 'background.popup', '.reply-to-bubble': { backgroundColor: 'background.popup' } },
-                    lineHeight: lineHeightTextareaMd,
-                  }} />
-
-                {!showChatReplyTo && tokenLimit > 0 && (tokensComposer > 0 || (tokensHistory + tokensReponseMax) > 0) && (
-                  <TokenProgressbarMemo direct={tokensComposer} history={tokensHistory} responseMax={tokensReponseMax} limit={tokenLimit} tokenPriceIn={tokenPriceIn} tokenPriceOut={tokenPriceOut} />
+                {/* [mobile] [+] attachment sources menu */}
+                {showChatAttachments === true && (
+                  <AttachmentSourcesMemo
+                    mode='menu-compact'
+                    canBrowse={browseCapability.mayWork}
+                    hasScreenCapture={supportsScreenCapture}
+                    hasCamera={supportsCameraCapture()}
+                    onlyImages={false /* because if yes, we only show the attach files above */}
+                    onAttachClipboard={attachAppendClipboardItems}
+                    onAttachFiles={handleAttachFiles}
+                    onAttachScreenCapture={handleAttachScreenCapture}
+                    onOpenCamera={handleOpenCamera}
+                    onOpenGoogleDrivePicker={openGoogleDrivePicker}
+                    onOpenWebInput={openWebInputDialog}
+                  />
                 )}
 
-                {!showChatReplyTo && tokenLimit > 0 && (
-                  <TokenBadgeMemo direct={tokensComposer} history={tokensHistory} responseMax={tokensReponseMax} limit={tokenLimit} tokenPriceIn={tokenPriceIn} tokenPriceOut={tokenPriceOut} showCost={labsShowCost} showExcess absoluteBottomRight />
+                {/* [Mobile] MultiChat button */}
+                {props.isMulticast !== null && <ButtonMultiChatMemo isMobile multiChat={props.isMulticast} onSetMultiChat={props.setIsMulticast} />}
+
+              </Box>
+            )}
+
+            {/* [Desktop, Col1] Insert Multi-modal content buttons */}
+            {isDesktop && showChatAttachments && (
+              <Box sx={{ flexGrow: 0, display: 'grid', gap: 0.5, alignSelf: 'flex-start' }}>
+
+                {/* [desktop] Attachment Sources: dropdown menu or inline buttons */}
+                <AttachmentSourcesMemo
+                  mode={!labsComposerAttachmentsInline ? 'menu-rich' : 'inline-buttons'}
+                  color={!labsComposerAttachmentsInline ? (showTint || 'neutral') : showTint}
+                  richButtonStandOut={!isText && !isAppend}
+                  canBrowse={browseCapability.mayWork}
+                  hasScreenCapture={supportsScreenCapture}
+                  hasCamera={supportsCameraCapture()}
+                  onlyImages={showChatAttachments === 'only-images'}
+                  onAttachClipboard={attachAppendClipboardItems}
+                  onAttachFiles={handleAttachFiles}
+                  onAttachScreenCapture={handleAttachScreenCapture}
+                  onOpenCamera={handleOpenCamera}
+                  onOpenGoogleDrivePicker={openGoogleDrivePicker}
+                  onOpenWebInput={openWebInputDialog}
+                />
+
+              </Box>
+            )}
+
+
+            {/* Top: Textarea & Mic & Overlays, Bottom, Attachment Drafts */}
+            <Box sx={{
+              flexGrow: 1,
+              // layout
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 1,
+              minWidth: 200, // flex: enable X-scrolling (resetting any possible minWidth due to the attachment drafts)
+            }}>
+
+              {/* Text Edit + Mic buttons + MicOverlay */}
+              <Box sx={{ position: 'relative' /* for Mic overlay */, height: '100%' }}>
+
+                {/* Edit box with inner Token Progress bar */}
+                <Box sx={{ position: 'relative' /* for TokenBadge & TokenProgress */, height: '100%' }}>
+
+                  <Textarea
+                    variant='outlined'
+                    color={isDraw ? 'warning' : isReAct ? 'success' : undefined}
+                    autoFocus={isDesktop}
+                    minRows={isMobile ? 3.5 : isDraw ? 4 : agiAttachmentPrompts.hasData ? 3 : showChatInReferenceTo ? 4 : 5}
+                    maxRows={isMobile ? 8 : 10}
+                    placeholder={textPlaceholder}
+                    value={composeText}
+                    onChange={handleTextareaTextChange}
+                    onKeyDown={handleTextareaKeyDown}
+                    onPasteCapture={handleAttachCtrlV}
+                    // onFocusCapture={handleFocusModeOn}
+                    // onBlurCapture={handleFocusModeOff}
+                    endDecorator={isDraw
+                      ? <ComposerTextAreaDrawActions
+                        composerText={composeText}
+                        onReplaceText={setComposeText}
+                      />
+                      : <ComposerTextAreaActions
+                        agiAttachmentPrompts={agiAttachmentPrompts}
+                        inReferenceTo={inReferenceTo}
+                        onAppendAndSend={handleAppendTextAndSend}
+                        onRemoveReferenceTo={handleRemoveInReferenceTo}
+                      />
+                    }
+                    slotProps={{
+                      textarea: {
+                        tabIndex: !recognitionState.isActive ? undefined : -1,
+                        height: '100%',
+                        enterKeyHint: enterIsNewline ? 'enter' : 'send',
+                        sx: {
+                          ...(recognitionState.isAvailable && { pr: { md: 5 } }),
+                          // mb: 0.5, // no need; the outer container already has enough p (for TokenProgressbar)
+                        },
+                        ref: composerTextAreaRef,
+                      },
+                    }}
+                    sx={{
+                      height: '100%',
+                      backgroundColor: showTint ? undefined : 'background.level1',
+                      '&:focus-within': { backgroundColor: 'background.popup', '.within-composer-focus': { backgroundColor: 'background.popup' } },
+                      lineHeight: lineHeightTextareaMd,
+                    }} />
+
+                  {!showChatInReferenceTo && !isDraw && tokenLimit > 0 && (tokensComposer > 0 || (tokensHistory + tokensResponseMax) > 0) && (
+                    <TokenProgressbarMemo chatPricing={tokenChatPricing} direct={tokensComposer} history={tokensHistory} responseMax={tokensResponseMax} limit={tokenLimit} />
+                  )}
+
+                  {!showChatInReferenceTo && !isDraw && tokenLimit > 0 && (
+                    <TokenBadgeMemo showCost hideBelowDollars={0.01} chatPricing={tokenChatPricing} direct={tokensComposer} history={tokensHistory} responseMax={tokensResponseMax} limit={tokenLimit} enableHover={!isMobile} showExcess absoluteBottomRight />
+                  )}
+
+                </Box>
+
+                {/* Mic & Mic Continuation Buttons */}
+                {recognitionState.isAvailable && (
+                  <Box sx={{
+                    position: 'absolute', top: 0, right: 0,
+                    zIndex: zIndexComposerOverlayMic + 1,
+                    mt: isDesktop ? 1 : 0.25,
+                    mr: isDesktop ? 1 : 0.25,
+                    display: 'flex', flexDirection: 'column', gap: isDesktop ? 1 : 0.25,
+                  }}>
+                    {isDesktop && <ButtonMicMemo variant={micVariant} color={micColor} errorMessage={recognitionState.errorMessage} onClick={handleToggleMic} noBackground={!recognitionState.isActive} />}
+
+                    {micIsRunning && (
+                      <ButtonMicContinuationMemo
+                        isActive={micContinuation}
+                        variant={micContinuation ? 'soft' : 'soft'} color={micContinuation ? 'primary' : 'neutral'} sx={{ background: micContinuation ? undefined : 'none' }}
+                        onClick={handleToggleMicContinuation}
+                      />
+                    )}
+                  </Box>
+                )}
+
+                {/* overlay: Mic */}
+                {micIsRunning && (
+                  <Card
+                    ref={micCardRef}
+                    color='primary' variant='soft'
+                    sx={{
+                      position: 'absolute', bottom: 0, left: 0, right: 0, top: 0,
+                      // alignItems: 'center', justifyContent: 'center',
+                      border: '1px solid',
+                      borderColor: 'primary.solidBg',
+                      borderRadius: 'sm',
+                      boxShadow: 'inset 1px 1px 4px -3px var(--joy-palette-primary-solidHoverBg)',
+                      zIndex: zIndexComposerOverlayMic,
+                      pl: 1.5,
+                      pr: { xs: 1.5, md: 5 },
+                      py: 0.625,
+                      overflow: 'auto',
+                      // '[data-joy-color-scheme="light"] &': {
+                      //   backgroundColor: 'primary.50',
+                      // },
+                    }}>
+                    <Typography sx={{
+                      color: 'primary.softColor',
+                      lineHeight: lineHeightTextareaMd,
+                      '& > .preceding': {
+                        color: 'primary.softDisabledColor',
+                        // color: 'rgba(var(--joy-palette-primary-mainChannel) / 0.6)',
+                        overflowWrap: 'break-word',
+                        textWrap: 'wrap',
+                        whiteSpaceCollapse: 'preserve',
+                      },
+                      '& > .interim': {
+                        textDecoration: 'underline',
+                        textDecorationThickness: '0.25em',
+                        textDecorationColor: 'rgba(var(--joy-palette-primary-mainChannel) / 0.1)',
+                        textDecorationSkipInk: 'none',
+                        textUnderlineOffset: '0.25em',
+                      },
+                      '& > .placeholder': {
+                        fontStyle: 'italic',
+                      },
+                    }}>
+                      {!!composeText && <span className='preceding'>{composeText.endsWith(' ') ? composeText : composeText + ' '}</span>}
+                      {speechInterimResult.transcript}
+                      <span className={speechInterimResult.interimTranscript === PLACEHOLDER_INTERIM_TRANSCRIPT ? 'placeholder' : 'interim'}>{speechInterimResult.interimTranscript}</span>
+                    </Typography>
+                  </Card>
                 )}
 
               </Box>
 
-              {/* Mic & Mic Continuation Buttons */}
-              {isSpeechEnabled && (
-                <Box sx={{
-                  position: 'absolute', top: 0, right: 0,
-                  zIndex: zIndexComposerOverlayMic + 1,
-                  mt: isDesktop ? 1 : 0.25,
-                  mr: isDesktop ? 1 : 0.25,
-                  display: 'flex', flexDirection: 'column', gap: isDesktop ? 1 : 0.25,
-                }}>
-                  {isDesktop && <ButtonMicMemo variant={micVariant} color={micColor} onClick={handleToggleMic} noBackground={!isRecordingSpeech} />}
-
-                  {micIsRunning && (
-                    <ButtonMicContinuationMemo
-                      variant={micContinuation ? 'solid' : 'soft'} color={micContinuation ? 'primary' : 'neutral'} sx={{ background: micContinuation ? undefined : 'none' }}
-                      onClick={handleToggleMicContinuation}
-                    />
-                  )}
-                </Box>
-              )}
-
-              {/* overlay: Mic */}
-              {micIsRunning && (
-                <Card
-                  color='primary' variant='soft'
-                  sx={{
-                    position: 'absolute', bottom: 0, left: 0, right: 0, top: 0,
-                    // alignItems: 'center', justifyContent: 'center',
-                    border: '1px solid',
-                    borderColor: 'primary.solidBg',
-                    borderRadius: 'sm',
-                    zIndex: zIndexComposerOverlayMic,
-                    pl: 1.5,
-                    pr: { xs: 1.5, md: 5 },
-                    py: 0.625,
-                    overflow: 'auto',
-                  }}>
-                  <Typography sx={{
-                    color: 'primary.softColor',
-                    lineHeight: lineHeightTextareaMd,
-                    '& .interim': {
-                      textDecoration: 'underline',
-                      textDecorationThickness: '0.25em',
-                      textDecorationColor: 'rgba(var(--joy-palette-primary-mainChannel) / 0.1)',
-                      textDecorationSkipInk: 'none',
-                      textUnderlineOffset: '0.25em',
-                    },
-                  }}>
-                    {speechInterimResult.transcript}{' '}
-                    <span className={speechInterimResult.interimTranscript !== 'Listening...' ? 'interim' : undefined}>{speechInterimResult.interimTranscript}</span>
-                  </Typography>
-                </Card>
-              )}
-
-              {/* overlay: Drag & Drop*/}
-              {!isMobile && (
-                <Card
-                  color={isDragging ? 'success' : undefined} variant={isDragging ? 'soft' : undefined} invertedColors={isDragging}
-                  sx={isDragging ? dropppedCardDraggingSx : dropperCardSx}
-                  onDragLeave={handleOverlayDragLeave}
-                  onDragOver={handleOverlayDragOver}
-                  onDrop={handleOverlayDrop}
-                >
-                  {isDragging && <AttachFileIcon sx={{ width: 40, height: 40, pointerEvents: 'none' }} />}
-                  {isDragging && <Typography level='title-sm' sx={{ pointerEvents: 'none' }}>
-                    I will hold on to this for you
-                  </Typography>}
-                </Card>
-              )}
-
-            </Box>
-
-            {/* Render any Attachments & menu items */}
-            <Attachments
-              llmAttachments={llmAttachments}
-              onAttachmentInlineText={handleAttachmentInlineText}
-              onAttachmentsClear={clearAttachments}
-              onAttachmentsInlineText={handleAttachmentsInlineText}
-            />
-
-          </Box>
-
-        </Box></Grid>
-
-
-        <Grid xs={12} md={3}>
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, height: '100%' } as const}>
-
-            {/* [mobile] This row is here only for the [mobile] bottom-start corner item */}
-            {/* [desktop] This column arrangement will have the [desktop] beam button right under call */}
-            <Box sx={isMobile ? { display: 'flex' } : { display: 'grid', gap: 1 }}>
-
-              {/* [mobile] bottom-corner secondary button */}
-              {isMobile && (showChatExtras
-                  ? <ButtonCallMemo isMobile disabled={!props.conversationId || !chatLLMId} onClick={handleCallClicked} />
-                  : isDraw
-                    ? <ButtonOptionsDraw isMobile onClick={handleDrawOptionsClicked} sx={{ mr: { xs: 1, md: 2 } }} />
-                    : <IconButton disabled sx={{ mr: { xs: 1, md: 2 } }} />
-              )}
-
-              {/* Responsive Send/Stop buttons */}
-              <ButtonGroup
-                variant={buttonVariant}
-                color={buttonColor}
-                sx={{
-                  flexGrow: 1,
-                  backgroundColor: (isMobile && buttonVariant === 'outlined') ? 'background.popup' : undefined,
-                  boxShadow: (isMobile && buttonVariant !== 'outlined') ? 'none' : `0 8px 24px -4px rgb(var(--joy-palette-${buttonColor}-mainChannel) / 20%)`,
-                }}
-              >
-                {!assistantAbortible ? (
-                  <Button
-                    key='composer-act'
-                    fullWidth disabled={!props.conversationId || !chatLLMId || !llmAttachments.isOutputAttacheable}
-                    onClick={handleSendClicked}
-                    endDecorator={buttonIcon}
-                    sx={{ '--Button-gap': '1rem' }}
-                  >
-                    {micContinuation && 'Voice '}{buttonText}
-                  </Button>
-                ) : (
-                  <Button
-                    key='composer-stop'
-                    fullWidth variant='soft' disabled={!props.conversationId}
-                    onClick={handleStopClicked}
-                    endDecorator={<StopOutlinedIcon sx={{ fontSize: 18 }} />}
-                    sx={{ animation: `${animationEnterBelow} 0.1s ease-out` }}
-                  >
-                    Stop
-                  </Button>
-                )}
-
-                {/* [Beam] Open Beam */}
-                {/*{isText && <Tooltip title='Open Beam'>*/}
-                {/*  <IconButton variant='outlined' disabled={!props.conversationId || !chatLLMId} onClick={handleSendTextBeamClicked}>*/}
-                {/*    <ChatBeamIcon />*/}
-                {/*  </IconButton>*/}
-                {/*</Tooltip>}*/}
-
-                {/* [Draw] Imagine */}
-                {isDraw && !!composeText && <Tooltip title='Imagine a drawing prompt'>
-                  <IconButton variant='outlined' disabled={!props.conversationId || !chatLLMId} onClick={handleTextImagineClicked}>
-                    <AutoAwesomeIcon />
-                  </IconButton>
-                </Tooltip>}
-
-                {/* Mode expander */}
-                <IconButton
-                  variant={assistantAbortible ? 'soft' : isDraw ? undefined : undefined}
-                  disabled={!props.conversationId || !chatLLMId || !!chatModeMenuAnchor}
-                  onClick={handleModeSelectorShow}
-                >
-                  <ExpandLessIcon />
-                </IconButton>
-              </ButtonGroup>
-
-              {/* [desktop] secondary-top buttons */}
-              {isDesktop && showChatExtras && !assistantAbortible && (
-                <ButtonBeamMemo
-                  disabled={!props.conversationId || !chatLLMId || !llmAttachments.isOutputAttacheable}
-                  hasContent={!!composeText}
-                  onClick={handleSendTextBeamClicked}
+              {/* Render any Attachments & menu items */}
+              {!!conversationOverlayStore && showChatAttachments && (
+                <ComposerAttachmentDraftsList
+                  attachmentDraftsStoreApi={conversationOverlayStore}
+                  attachmentDrafts={attachmentDrafts}
+                  enrichment={attEnrichment}
+                  enrichmentSummary={attEnrichSummary}
+                  agiAttachmentPrompts={agiAttachmentPrompts}
+                  onAttachmentDraftsAction={handleAttachmentDraftsAction}
                 />
               )}
 
             </Box>
 
-            {/* [desktop] Multicast switch (under the Chat button) */}
-            {isDesktop && props.isMulticast !== null && <ButtonMultiChatMemo multiChat={props.isMulticast} onSetMultiChat={props.setIsMulticast} />}
+          </Box></Grid>
 
-            {/* [desktop] secondary buttons (aligned to bottom for now, and mutually exclusive) */}
-            {isDesktop && <Box sx={{ mt: 'auto', display: 'grid', gap: 1 }}>
 
-              {/* [desktop] Call secondary button */}
-              {showChatExtras && <ButtonCallMemo disabled={!props.conversationId || !chatLLMId} onClick={handleCallClicked} />}
+          {/* [Mobile: bottom, Desktop: right] */}
+          <Grid xs={12} md={3}>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, height: '100%' } as const}>
 
-              {/* [desktop] Draw Options secondary button */}
-              {isDraw && <ButtonOptionsDraw onClick={handleDrawOptionsClicked} />}
+              {/* [mobile] This row is here only for the [mobile] bottom-start corner item */}
+              {/* [desktop] This column arrangement will have the [desktop] beam button right under call */}
+              <Box sx={isMobile ? { display: 'flex' } : { display: 'grid', gap: 1 }}>
 
-            </Box>}
+                {/* [mobile] bottom-corner secondary button */}
+                {isMobile && (showChatExtras
+                    ? (composerQuickButton === 'call' && speechMayWork
+                      ? <ButtonCallMemo isMobile disabled={noConversation || noLLM} onClick={handleCallClicked} />
+                      : <ButtonBeamMemo isMobile disabled={noConversation /*|| noLLM*/} color={beamButtonColor} hasContent={!!composeText} onClick={handleSendTextBeamClicked} />)
+                    : isDraw
+                      ? <ButtonOptionsDraw isMobile onClick={handleDrawOptionsClicked} sx={{ mr: { xs: 1, md: 2 } }} />
+                      : <IconButton disabled sx={{ mr: { xs: 1, md: 2 } }} />
+                )}
 
-          </Box>
+                {/* Responsive Send/Stop buttons */}
+                <ButtonGroup
+                  variant={sendButtonVariant}
+                  color={sendButtonColor}
+                  sx={{
+                    flexGrow: 1,
+                    backgroundColor: (isMobile && sendButtonVariant === 'outlined') ? 'background.popup' : undefined,
+                    boxShadow: (isMobile && sendButtonVariant !== 'outlined') ? 'none' : `0 8px 24px -4px rgb(var(--joy-palette-${sendButtonColor}-mainChannel) / 20%)`,
+                  }}
+                >
+                  {!assistantAbortible ? (
+                    <Button
+                      key='composer-act'
+                      fullWidth
+                      disabled={noConversation /* || noLLM*/}
+                      loading={sendStarted}
+                      loadingPosition='end'
+                      onClick={handleSendClicked}
+                      endDecorator={sendButtonIcon}
+                      sx={{ '--Button-gap': '1rem' }}
+                    >
+                      {micContinuation && 'Voice '}{sendButtonLabel}
+                    </Button>
+                  ) : (
+                    <Button
+                      key='composer-stop'
+                      fullWidth
+                      variant='soft'
+                      disabled={noConversation}
+                      onClick={handleStopClicked}
+                      endDecorator={<StopOutlinedIcon sx={{ fontSize: 18 }} />}
+                      sx={{ animation: `${animationEnterBelow} 0.1s ease-out` }}
+                    >
+                      Stop
+                    </Button>
+                  )}
+
+                  {/* [Beam] Open Beam */}
+                  {/*{isText && <Tooltip title='Open Beam'>*/}
+                  {/*  <IconButton variant='outlined' disabled={noConversation || noLLM} onClick={handleSendTextBeamClicked}>*/}
+                  {/*    <ChatBeamIcon />*/}
+                  {/*  </IconButton>*/}
+                  {/*</Tooltip>}*/}
+
+                  {/* [Draw] Imagine */}
+                  {/* NOTE: disabled: as we have prompt enhancement in the TextArea (Draw Mode) already */}
+                  {/*{isDraw && !!composeText && <Tooltip title='Generate an image prompt'>*/}
+                  {/*  <IconButton variant='outlined' disabled={noConversation || noLLM} onClick={handleTextImagineClicked}>*/}
+                  {/*    <AutoAwesomeIcon />*/}
+                  {/*  </IconButton>*/}
+                  {/*</Tooltip>}*/}
+
+                  {/* Mode expander */}
+                  <IconButton
+                    variant={chatExecuteMenuShown ? 'outlined' : assistantAbortible ? 'soft' : isDraw ? undefined : undefined}
+                    disabled={noConversation /*|| chatExecuteMenuShown*/}
+                    onClick={showChatExecuteMenu}
+                  >
+                    <ExpandLessIcon />
+                  </IconButton>
+                </ButtonGroup>
+
+                {/* [desktop] secondary-top buttons */}
+                {isDesktop && showChatExtras && !assistantAbortible && (
+                  <ButtonBeamMemo
+                    color={beamButtonColor}
+                    disabled={noConversation /*|| noLLM*/}
+                    hasContent={!!composeText}
+                    onClick={handleSendTextBeamClicked}
+                  />
+                )}
+
+              </Box>
+
+              {/* [desktop] Draw mode N buttons */}
+              {isDesktop && isDraw && <ButtonGroupDrawRepeat drawRepeat={drawRepeat} setDrawRepeat={setDrawRepeat} />}
+
+              {/* [desktop] Multicast switch (under the Chat button) */}
+              {isDesktop && props.isMulticast !== null && <ButtonMultiChatMemo multiChat={props.isMulticast} onSetMultiChat={props.setIsMulticast} />}
+
+              {/* [desktop] secondary bottom-buttons (aligned to bottom for now, and mutually exclusive) */}
+              {isDesktop && <Box sx={{ mt: 'auto', display: 'grid', gap: 1 }}>
+
+                {/* [desktop] Call secondary button - hidden when speech recognition is not available */}
+                {showChatExtras && speechMayWork && <ButtonCallMemo disabled={noConversation || noLLM || assistantAbortible} onClick={handleCallClicked} />}
+
+                {/* [desktop] Draw Options secondary button */}
+                {isDraw && <ButtonOptionsDraw onClick={handleDrawOptionsClicked} />}
+
+              </Box>}
+
+            </Box>
+          </Grid>
+
+          {/* overlay: Drag & Drop*/}
+          {dropComponent}
+
         </Grid>
 
-      </Grid>
+      </Box> {/* Padding container of the whole composer */}
 
-      {/* Mode selector */}
-      {!!chatModeMenuAnchor && (
-        <ChatModeMenu
-          isMobile={isMobile}
-          anchorEl={chatModeMenuAnchor} onClose={handleModeSelectorHide}
-          chatModeId={chatModeId} onSetChatModeId={handleModeChange}
-          capabilityHasTTI={props.capabilityHasT2I}
-        />
-      )}
+      {/* Execution Mode Menu */}
+      {chatExecuteMenuComponent}
 
-      {/* Camera */}
-      {cameraCaptureComponent}
+      {/* Google Drive Picker (when open) */}
+      {googleDrivePickerComponent}
 
-      {/* Actile */}
+      {/* Web Input Dialog (when open) */}
+      {webInputDialogComponent}
+
+      {/* Actile (when open) */}
       {actileComponent}
 
     </Box>

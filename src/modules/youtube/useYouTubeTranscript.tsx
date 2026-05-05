@@ -5,10 +5,11 @@
 import * as React from 'react';
 import { useQuery } from '@tanstack/react-query';
 
-import { frontendSideFetch } from '~/common/util/clientFetchers';
-
-import { fetchYouTubeTranscript } from './youtube.fetcher';
+// import { fetchYouTubeTranscript } from './youtube.fetcher';
 import { apiAsync } from '~/common/util/trpc.client';
+
+import type { YouTubeVideoData } from './youtube.types';
+
 
 // configuration
 const USE_FRONTEND_FETCH = false;
@@ -20,6 +21,15 @@ export interface YTVideoTranscript {
   thumbnailUrl: string;
 }
 
+export async function youTubeGetVideoData(videoId: string): Promise<YouTubeVideoData> {
+  if (USE_FRONTEND_FETCH) {
+    // return fetchYouTubeTranscript(videoId, url => frontendSideFetch(url).then(res => res.text()));
+    throw new Error('Big-AGI: Browser youtube transcript download is disabled.');
+  }
+  return apiAsync.youtube.getTranscript.query({ videoId });
+}
+
+
 export function useYouTubeTranscript(videoID: string | null, onNewTranscript: (transcript: YTVideoTranscript) => void) {
 
   // state
@@ -29,9 +39,7 @@ export function useYouTubeTranscript(videoID: string | null, onNewTranscript: (t
   const { data, isFetching, isError, error } = useQuery({
     enabled: !!videoID,
     queryKey: ['transcript', videoID],
-    queryFn: async () => USE_FRONTEND_FETCH
-      ? fetchYouTubeTranscript(videoID!, url => frontendSideFetch(url).then(res => res.text()))
-      : apiAsync.youtube.getTranscript.query({ videoId: videoID! }),
+    queryFn: async () => youTubeGetVideoData(videoID!),
     staleTime: Infinity,
   });
 
@@ -54,6 +62,7 @@ export function useYouTubeTranscript(videoID: string | null, onNewTranscript: (t
   return {
     transcript,
     isFetching,
-    isError, error,
+    isError,
+    error,
   };
 }

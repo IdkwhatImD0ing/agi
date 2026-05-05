@@ -1,14 +1,13 @@
 import * as React from 'react';
-import { v4 as uuidv4 } from 'uuid';
 import type { StateCreator } from 'zustand/vanilla';
 
-import type { DLLMId } from '~/modules/llms/store-llms';
-
-import type { DMessage } from '~/common/state/store-chats';
+import type { DLLMId } from '~/common/stores/llms/llms.types';
+import type { DMessage } from '~/common/stores/chat/chat.message';
+import type { DMessageFragment, DMessageFragmentId } from '~/common/stores/chat/chat.fragments';
+import { agiUuid } from '~/common/util/idUtils';
 
 import { CUSTOM_FACTORY_ID, FFactoryId, findFusionFactory, FUSION_FACTORIES, FUSION_FACTORY_DEFAULT } from './instructions/beam.gather.factories';
-import { GATHER_PLACEHOLDER } from '../beam.config';
-import { RootStoreSlice } from '../store-beam-vanilla';
+import { RootStoreSlice } from '../store-beam_vanilla';
 import { ScatterStoreSlice } from '../scatter/beam.scatter';
 import { gatherStartFusion, gatherStopFusion, Instruction } from './instructions/beam.gather.execution';
 import { updateBeamLastConfig } from '../store-module-beam';
@@ -48,7 +47,7 @@ export interface BFusion {
 
 const createBFusion = (factoryId: FFactoryId, instructions: Instruction[], llmId: DLLMId | null): BFusion => ({
   // const
-  fusionId: uuidv4(),
+  fusionId: agiUuid('beam-fusion'),
   factoryId,
 
   // options
@@ -84,8 +83,7 @@ export function fusionIsStopped(fusion: BFusion | null): boolean {
 }
 
 export function fusionIsUsableOutput(fusion: BFusion | null): boolean {
-  const message = fusion?.outputDMessage ?? null;
-  return !!message && !!message.updated && !!message.text && message.text !== GATHER_PLACEHOLDER;
+  return !!fusion?.outputDMessage?.fragments.length;
 }
 
 export function fusionIsError(fusion: BFusion | null): boolean {
@@ -134,6 +132,8 @@ export interface GatherStoreSlice extends GatherStateSlice {
   fusionRecreateAsCustom: (sourceFusionId: BFusionId) => void;
   fusionInstructionUpdate: (fusionId: BFusionId, instructionIndex: number, update: Partial<Instruction>) => void;
   fusionSetLlmId: (fusionId: BFusionId, llmId: DLLMId | null) => void;
+  fusionDeleteFragment: (fusionId: BFusionId, fragmentId: DMessageFragmentId) => void;
+  fusionReplaceFragment: (fusionId: BFusionId, fragmentId: DMessageFragmentId, newFragment: DMessageFragment) => void;
 
   createFusion: () => void;
   removeFusion: (fusionId: BFusionId) => void;
@@ -216,6 +216,58 @@ export const createGatherSlice: StateCreator<RootStoreSlice & ScatterStoreSlice 
       llmId,
     }),
 
+  fusionDeleteFragment: (fusionId: BFusionId, fragmentId: DMessageFragmentId) =>
+    _get()._fusionUpdate(fusionId, (fusion) => {
+      // Ensure there's an output message
+      if (!fusion.outputDMessage) {
+        console.error(`fusionDeleteFragment: No output message for fusion ${fusionId}`);
+        return {};
+      }
+
+      // Find the fragment to delete
+      const fragmentIndex = fusion.outputDMessage.fragments.findIndex(f => f.fId === fragmentId);
+      if (fragmentIndex < 0) {
+        console.error(`fusionDeleteFragment: Fragment not found for ID ${fragmentId} in fusion ${fusionId}`);
+        return {};
+      }
+
+      return {
+        outputDMessage: {
+          ...fusion.outputDMessage,
+          fragments: fusion.outputDMessage.fragments.filter((_, index) => index !== fragmentIndex),
+          updated: Date.now(),
+        },
+      };
+    }),
+
+  fusionReplaceFragment: (fusionId: BFusionId, fragmentId: DMessageFragmentId, newFragment: DMessageFragment) =>
+    _get()._fusionUpdate(fusionId, (fusion) => {
+      // Ensure there's an output message
+      if (!fusion.outputDMessage) {
+        console.error(`fusionReplaceFragment: No output message for fusion ${fusionId}`);
+        return {};
+      }
+
+      // Find the fragment to replace
+      const fragmentIndex = fusion.outputDMessage.fragments.findIndex(f => f.fId === fragmentId);
+      if (fragmentIndex < 0) {
+        console.error(`fusionReplaceFragment: Fragment not found for ID ${fragmentId} in fusion ${fusionId}`);
+        return {};
+      }
+
+      return {
+        outputDMessage: {
+          ...fusion.outputDMessage,
+          fragments: fusion.outputDMessage.fragments.map((fragment, index) =>
+            (index === fragmentIndex)
+              ? { ...newFragment }
+              : fragment,
+          ),
+          updated: Date.now(),
+        },
+      };
+    }),
+
 
   createFusion: () => {
     // get factory
@@ -261,7 +313,7 @@ export const createGatherSlice: StateCreator<RootStoreSlice & ScatterStoreSlice 
     // start the fusion
     const { inputHistory, rays, _fusionUpdate } = _get();
     const chatMessages = inputHistory ? [...inputHistory] : [];
-    const rayMessages = rays.map(ray => ray.message).filter(message => !!message.text.trim());
+    const rayMessages = rays.map(ray => ray.message).filter(message => !!message.fragments.length);
     const onUpdate = (update: FusionUpdateOrFn) => _fusionUpdate(fusion.fusionId, update);
     gatherStartFusion(fusion, chatMessages, rayMessages, onUpdate);
   },

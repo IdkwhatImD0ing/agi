@@ -4,7 +4,9 @@ import { useShallow } from 'zustand/react/shallow';
 import type { SxProps, VariantProp } from '@mui/joy/styles/types';
 import { Alert, Box, Button, Typography, useTheme } from '@mui/joy';
 import AddCircleOutlineRoundedIcon from '@mui/icons-material/AddCircleOutlineRounded';
-import LanguageIcon from '@mui/icons-material/Language';
+import LanguageRoundedIcon from '@mui/icons-material/LanguageRounded';
+
+import { BrowserLang } from '~/common/util/pwaUtils';
 
 import { Fusion } from './Fusion';
 import { findFusionFactory, FusionFactorySpec } from './instructions/beam.gather.factories';
@@ -12,7 +14,6 @@ import { findFusionFactory, FusionFactorySpec } from './instructions/beam.gather
 import { BeamCard, beamCardClasses } from '../BeamCard';
 import { BeamStoreApi, useBeamStore } from '../store-beam.hooks';
 import { GATHER_COLOR } from '../beam.config';
-import { browserLangNotUS } from '~/common/util/pwaUtils';
 
 
 const fusionGridDesktopSx: SxProps = {
@@ -98,7 +99,7 @@ export function BeamFusionGrid(props: {
     <Box sx={{
       ...(props.isMobile ? fusionGridMobileSx : fusionGridDesktopSx),
       ...(isEmpty ? {
-        backgroundColor: 'neutral.solidBg',
+        backgroundColor: isDarkMode ? 'neutral.900' : 'neutral.solidBg',
       } : {
         backgroundColor: isDarkMode ? 'success.900' : '#F2FFFA', // f8fff8 was good, too close to the gree hue
         pt: 'var(--Pad)',
@@ -111,6 +112,7 @@ export function BeamFusionGrid(props: {
           key={'fusion-' + fusionId}
           beamStore={props.beamStore}
           fusionId={fusionId}
+          isMobile={props.isMobile}
         />
       ))}
 
@@ -119,7 +121,7 @@ export function BeamFusionGrid(props: {
         <BeamCard
           className={isEmpty ? beamCardClasses.smashTop : undefined}
           sx={{
-            backgroundColor: props.canGather ? `${GATHER_COLOR}.softBg` : undefined,
+            backgroundColor: props.canGather ? `${GATHER_COLOR}.softBg` : isDarkMode ? 'neutral.700' : undefined,
             // boxShadow: `0px 6px 16px -12px rgb(var(--joy-palette-${props.canGather ? GATHER_COLOR : 'neutral'}-darkChannel) / 40%)`,
             mb: 'auto',
           }}
@@ -147,19 +149,20 @@ export function BeamFusionGrid(props: {
           </Box> : (
             <Typography level='body-sm' sx={{ opacity: 0.8 }}>
               {/*You need two or more replies for a {currentFactory?.shortLabel?.toLocaleLowerCase() ?? ''} merge.*/}
-              Waiting for multiple responses.
+              {/*Waiting for multiple responses.*/}
+              Merge needs 2+ replies. Beam some first.
             </Typography>
           )}
         </BeamCard>
       )}
 
       {/* Full-width warning if not */}
-      {browserLangNotUS && (
+      {BrowserLang.notUS && (
         <Alert color='warning' sx={{
           // full row of the grid
           gridColumn: '1 / -1',
         }}>
-          <Typography level='body-sm' color='warning' startDecorator={<LanguageIcon />}>
+          <Typography level='body-sm' color='warning' startDecorator={<LanguageRoundedIcon />}>
             Note: Merges are defined in English and have not been translated to your browser language ({navigator.language}) yet.
           </Typography>
         </Alert>

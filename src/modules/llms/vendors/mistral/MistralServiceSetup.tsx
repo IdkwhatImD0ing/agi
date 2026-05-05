@@ -1,0 +1,77 @@
+import * as React from 'react';
+
+import { Typography } from '@mui/joy';
+
+import type { DModelsServiceId } from '~/common/stores/llms/llms.service.types';
+import { AlreadySet } from '~/common/components/AlreadySet';
+import { FormInputKey } from '~/common/components/forms/FormInputKey';
+import { InlineError } from '~/common/components/InlineError';
+import { Link } from '~/common/components/Link';
+import { SetupFormClientSideToggle } from '~/common/components/forms/SetupFormClientSideToggle';
+import { SetupFormRefetchButton } from '~/common/components/forms/SetupFormRefetchButton';
+import { useToggleableBoolean } from '~/common/util/hooks/useToggleableBoolean';
+
+import { ApproximateCosts } from '../ApproximateCosts';
+import { useLlmUpdateModels } from '../../llm.client.hooks';
+import { useServiceSetup } from '../useServiceSetup';
+
+import { ModelVendorMistral } from './mistral.vendor';
+
+
+const MISTRAL_REG_LINK = 'https://console.mistral.ai/';
+
+
+export function MistralServiceSetup(props: { serviceId: DModelsServiceId }) {
+
+  // external state
+  const { service, serviceAccess, serviceHasCloudTenantConfig, serviceHasLLMs, serviceSetupValid, updateSettings } =
+    useServiceSetup(props.serviceId, ModelVendorMistral);
+
+  // derived state
+  const { clientSideFetch, oaiKey: mistralKey } = serviceAccess;
+  const needsUserKey = !serviceHasCloudTenantConfig;
+
+  // advanced mode - initialize open if CSF is enabled, but let user toggle freely
+  const advanced = useToggleableBoolean(!!clientSideFetch);
+  const showAdvanced = advanced.on;
+
+  const shallFetchSucceed = !needsUserKey || (!!mistralKey && serviceSetupValid);
+  const showKeyError = !!mistralKey && !serviceSetupValid;
+
+  // fetch models
+  const { isFetching, refetch, isError, error } =
+    useLlmUpdateModels(!serviceHasLLMs && shallFetchSucceed, service);
+
+  return <>
+
+    <ApproximateCosts serviceId={service?.id} />
+
+    <FormInputKey
+      autoCompleteId='mistral-key' label='Mistral Key'
+      rightLabel={<>{needsUserKey
+        ? !mistralKey && <Link level='body-sm' href={MISTRAL_REG_LINK} target='_blank'>request Key</Link>
+        : <AlreadySet />}
+      </>}
+      value={mistralKey} onChange={value => updateSettings({ oaiKey: value })}
+      required={needsUserKey} isError={showKeyError}
+      placeholder='...'
+    />
+
+    {/*<Typography level='body-sm'>*/}
+    {/*  In order of capabilities we have Large, Medium, Small (Open 8x7B = Small 2312) and Tiny (Open 7B = Tiny 2312) models.*/}
+    {/*  Note the elegance of the numbers, representing the Year and Month or release (YYMM).*/}
+    {/*</Typography>*/}
+
+    {showAdvanced && <SetupFormClientSideToggle
+      visible={!!mistralKey}
+      checked={!!clientSideFetch}
+      onChange={on => updateSettings({ csf: on })}
+      helpText='Connect directly to Mistral API from your browser instead of through the server.'
+    />}
+
+    <SetupFormRefetchButton refetch={refetch} disabled={/*!shallFetchSucceed ||*/ isFetching} loading={isFetching} error={isError} advanced={advanced} />
+
+    {isError && <InlineError error={error} />}
+
+  </>;
+}

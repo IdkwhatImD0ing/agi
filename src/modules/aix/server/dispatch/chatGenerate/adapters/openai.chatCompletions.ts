@@ -1,0 +1,824 @@
+import * as z from 'zod/v4';
+
+import type { OpenAIDialects } from '~/modules/llms/server/openai/openai.access';
+
+import { AixAPI_Model, AixAPIChatGenerate_Request, AixMessages_ChatMessage, AixMessages_SystemMessage, AixParts_DocPart, AixParts_InlineAudioPart, AixParts_MetaInReferenceToPart, AixTools_ToolDefinition, AixTools_ToolsPolicy } from '../../../api/aix.wiretypes';
+import { OpenAIWire_API_Chat_Completions, OpenAIWire_ContentParts, OpenAIWire_Messages } from '../../wiretypes/openai.wiretypes';
+
+import { aixSpillShallFlush, aixSpillSystemToUser, approxDocPart_To_String } from './adapters.common';
+
+
+//
+// OpenAI API - Chat Adapter - Implementation Notes
+//
+// - only supports N=1, mainly because the whole ecosystem downstream only supports N=1
+// - not implemented: top_p, parallel_tool_calls, seed (deprecated), stop, user (deprecated -> safety_identifier, prompt_cache_key)
+// - fully ignored at the moment: frequency_penalty, presence_penalty, logit_bias, logprobs, top_logprobs, service_tier
+// - impedence mismatch: see the notes in the message conversion function for additional decisions, including:
+//   - doc parts embedded as markdown text
+//   - image parts embedded as base64 data URLs
+//   - all tool calls embedded as function calls, and multiple will be batched together
+//
+
+// configuration
+const hotFixOnlySupportN1 = true;
+const hotFixPreferArrayUserContent = true;
+const hotFixForceImageContentPartOpenAIDetail: 'auto' | 'low' | 'high' = 'high';
+const hotFixSquashTextSeparator = '\n\n\n---\n\n\n';
+const approxSystemMessageJoiner = '\n\n---\n\n';
+
+
+type TRequest = OpenAIWire_API_Chat_Completions.Request;
+type TRequestMessages = TRequest['messages'];
+
+export function aixToOpenAIChatCompletions(openAIDialect: OpenAIDialects, model: AixAPI_Model, _chatGenerate: AixAPIChatGenerate_Request, streaming: boolean): TRequest {
+
+  // Pre-process CGR - approximate spill of System to User message
+  const chatGenerate = aixSpillSystemToUser(_chatGenerate);
+
+  // Dialect incompatibilities -> Hotfixes
+  // [DeepSeek, 2026-04-24] V4 doesn't require strict alternation but we keep coalescing for cleanliness; the reducer only merges assistant/user, tool messages stay separate (parallel tool_calls).
+  const hotFixAlternateUserAssistantRoles = openAIDialect === 'deepseek' || openAIDialect === 'perplexity';
+  const hotFixRemoveEmptyMessages = openAIDialect === 'moonshot' || openAIDialect === 'perplexity'; // [Moonshot, 2026-02-10] consecutive assistant messages (empty + content) break Moonshot - coalesce to fix
+  const hotFixRemoveStreamOptions = openAIDialect === 'azure' || openAIDialect === 'mistral';
+  const hotFixThrowCannotFC =
+    // [OpenRouter] 2025-10-02: do not throw, rather let it fail if upstream has issues
+    // openAIDialect === 'openrouter' || /* OpenRouter FC support is not good (as of 2024-07-15) */
+    openAIDialect === 'perplexity';
+
+  // Model incompatibilities -> Hotfixes
+
+  // [OpenAI] max_tokens is now fully deprecated in favor of max_completion_tokens for all OpenAI models
+  const hotFixUseMaxCompletionTokens = openAIDialect === 'openai' || openAIDialect === 'azure';
+
+  // [OpenAI] - o-family and reasoning models: don't support temperature/top_p, use developer role instead of system
+  const hotFixOpenAIOFamily = (openAIDialect === 'openai' || openAIDialect === 'azure')
+    && ['gpt-6', 'gpt-5', 'o4', 'o3', 'o1'].some(_id => model.id === _id || model.id.startsWith(_id + '-') || model.id.startsWith(_id + '.'));
+
+  // Throw if function support is needed but missing
+  if (chatGenerate.tools?.length && hotFixThrowCannotFC)
+    throw new Error('This service does not support function calls');
+
+  // Convert the chat messages to the OpenAI 4-Messages format
+  let chatMessages = _toOpenAIMessages(openAIDialect, chatGenerate.systemMessage, chatGenerate.chatSequence, hotFixOpenAIOFamily);
+
+  // Apply hotfixes
+
+  if (hotFixRemoveEmptyMessages)
+    chatMessages = _fixRemoveEmptyMessages(chatMessages);
+
+  if (hotFixAlternateUserAssistantRoles)
+    chatMessages = _fixAlternateUserAssistantRoles(chatMessages);
+
+  // [DeepSeek, 2026-04-24] When tools are present and thinking isn't disabled, V4 demands reasoning_content on EVERY assistant message in history
+  // Inject '' placeholder where missing; real reasoning is attached by _toOpenAIMessages
+  if (openAIDialect === 'deepseek' && chatGenerate.tools?.length)
+    for (const m of chatMessages)
+      if (m.role === 'assistant' && m.reasoning_content === undefined)
+        m.reasoning_content = '';
+
+
+  // constrained output modes - both JSON and tool invocations
+  // const strictJsonOutput = !!model.strictJsonOutput;
+  const strictToolInvocations = !!model.strictToolInvocations;
+
+  // Construct the request payload
+  let payload: TRequest = {
+    model: model.id,
+    messages: chatMessages,
+    tools: chatGenerate.tools && _toOpenAITools(chatGenerate.tools, strictToolInvocations),
+    tool_choice: chatGenerate.toolsPolicy && _toOpenAIToolChoice(openAIDialect, chatGenerate.toolsPolicy),
+    parallel_tool_calls: undefined,
+    max_tokens: model.maxTokens !== undefined ? model.maxTokens : undefined,
+    ...(model.temperature !== null ? { temperature: model.temperature !== undefined ? model.temperature : undefined } : {}),
+    top_p: undefined,
+    n: hotFixOnlySupportN1 ? undefined : 0, // NOTE: we choose to not support this at the API level - most downstram ecosystem supports 1 only, which is the default
+    stream: streaming,
+    stream_options: streaming ? { include_usage: true } : undefined,
+    response_format: model.strictJsonOutput ? {
+      type: 'json_schema',
+      json_schema: {
+        name: model.strictJsonOutput.name || 'response',
+        description: model.strictJsonOutput.description,
+        schema: model.strictJsonOutput.schema,
+        strict: true,
+      },
+    } : undefined,
+    seed: undefined,
+    stop: undefined,
+    user: undefined,
+  };
+
+  // Top-P instead of temperature
+  if (model.topP !== undefined) {
+    delete payload.temperature;
+    payload.top_p = model.topP;
+  }
+
+  // [OpenAI] Vendor-specific output modalities configuration
+  const outputsText = model.acceptsOutputs.includes('text');
+  const outputsAudio = model.acceptsOutputs.includes('audio');
+  const outputsImages = model.acceptsOutputs.includes('image')
+    || !!model.vndOaiImageGeneration; // this is here because when used in 'sweep' the 'acceptsOutputs' are not set yet
+  if ((openAIDialect === 'openai' || openAIDialect === 'openrouter') && (outputsAudio || outputsImages)) {
+    // set output modalities
+    const modalities = new Set(payload.modalities || []);
+    if (outputsText) modalities.add('text');
+    if (outputsAudio) modalities.add('audio');
+    // [OpenRouter, 2025-12-31] Extension for image output through the OpenAI ChatCompletions protocol
+    if (/*openAIDialect === 'openrouter' &&*/ outputsImages) modalities.add('image');
+    payload.modalities = Array.from(modalities);
+
+    // configure audio output
+    if (outputsAudio)
+      payload.audio = {
+        voice: 'alloy', // FIXME: have the voice be selectable
+        format: 'pcm16', // only supported value for streaming
+      };
+
+    // [OpenRouter, 2025-12-31] Extension for image output configuration through OpenAI ChatCompletions protocol
+    if (openAIDialect === 'openrouter' && (model.vndGeminiAspectRatio || model.vndGeminiImageSize)) {
+      payload.image_config = { ...payload.image_config || {} };
+      if (model.vndGeminiAspectRatio)
+        payload.image_config.aspect_ratio = model.vndGeminiAspectRatio;
+      if (model.vndGeminiImageSize)
+        payload.image_config.image_size = model.vndGeminiImageSize;
+    }
+  }
+
+  // [OpenAI] Vendor-specific reasoning effort
+  const reasoningEffort = model.reasoningEffort; // ?? model.vndOaiReasoningEffort;
+  if (reasoningEffort
+    && openAIDialect !== 'openrouter' // OpenRouter has its own channeling of this
+    && openAIDialect !== 'deepseek' && openAIDialect !== 'moonshot' && openAIDialect !== 'zai' // MoonShot maps to none->disabled / high->enabled
+    && openAIDialect !== 'perplexity' // Perplexity has its own block below with stricter validation
+  ) {
+    // for: 'alibaba' | 'azure' | 'groq' | 'lmstudio' | 'localai' | 'mistral' | 'openai' | 'openpipe' | 'togetherai' | 'xai'
+    payload.reasoning_effort = reasoningEffort;
+  }
+
+  // [Moonshot] Kimi K2.5 reasoning effort -> thinking mode (only 'none' and 'high' supported for now)
+  // [Z.ai] GLM thinking mode: binary enabled/disabled (supports GLM-4.5 series and higher) - https://docs.z.ai/guides/capabilities/thinking-mode
+  // [DeepSeek, 2026-04-23] V4 thinking control https://api-docs.deepseek.com/guides/thinking_mode
+  if (reasoningEffort && (openAIDialect === 'deepseek' || openAIDialect === 'moonshot' || openAIDialect === 'zai')) {
+    const allowedEffort = openAIDialect === 'deepseek' ? ['none', 'high', 'max'] : ['none', 'high'];
+    if (!allowedEffort.includes(reasoningEffort)) // domain validation
+      throw new Error(`${openAIDialect} only supports reasoning effort ${allowedEffort.join(', ')}, got '${reasoningEffort}'`);
+
+    payload.thinking = { type: reasoningEffort !== 'none' ? 'enabled' : 'disabled' };
+
+    // [DeepSeek, 2026-04-23] DeepSeek also supports effort control for reasoning-enabled requests - set it here as it was carved from the reasoningEffort setter before
+    if (openAIDialect === 'deepseek' && reasoningEffort !== 'none')
+      payload.reasoning_effort = reasoningEffort;
+  }
+
+
+  // [OpenAI, 2026-02-04] Verbosity control - official OpenAI parameter (low/medium/high, default: medium)
+  if (model.vndOaiVerbosity) {
+    // [OpenRouter, 2025-01-20] Also supported via OpenRouter for Anthropic Claude Opus 4.5, GPT-5 family
+    payload.verbosity = model.vndOaiVerbosity;
+  }
+
+  // --- Tools ---
+
+  // Allow/deny auto-adding hosted tools when custom tools are present
+  const hasCustomTools = chatGenerate.tools?.some(t => t.type === 'function_call');
+  const hasRestrictivePolicy = chatGenerate.toolsPolicy?.type === 'any' || chatGenerate.toolsPolicy?.type === 'function_call';
+  const skipWebSearchDueToCustomTools = hasCustomTools && hasRestrictivePolicy;
+
+  // Hosted tools
+  // [OpenAI] Vendor-specific web search context and/or geolocation
+  // NOTE: OpenAI doesn't support web search with minimal reasoning effort (see LLMParametersEditor for more details)
+  const skipWebSearchDueToMinimalReasoning = reasoningEffort === 'minimal';
+  if ((model.vndOaiWebSearchContext || model.userGeolocation) && !skipWebSearchDueToMinimalReasoning && !skipWebSearchDueToCustomTools) {
+    payload.web_search_options = {};
+    if (model.vndOaiWebSearchContext)
+      payload.web_search_options.search_context_size = model.vndOaiWebSearchContext;
+    if (model.userGeolocation)
+      payload.web_search_options.user_location = {
+        type: 'approximate',
+        approximate: {
+          ...model.userGeolocation,
+        },
+      };
+  }
+
+
+  // [OpenAI] Vendor-specific restore markdown, for newer o1 models
+  const skipMarkdownDueToCustomTools = hasCustomTools && hasRestrictivePolicy;
+  if (model.vndOaiRestoreMarkdown && !skipMarkdownDueToCustomTools)
+    _fixVndOaiRestoreMarkdown_Inline(payload);
+
+
+  // [OpenRouter] Vendor-specific web search (native or Exa)
+  if (openAIDialect === 'openrouter' && model.vndOrtWebSearch === 'auto')
+    payload.plugins = [...(payload.plugins || []), {
+      id: 'web',
+      // engine is optional - when undefined, OpenRouter uses native for supported models, falls back to Exa
+      // max_results: 5, // could be configurable in the future
+      // search_prompt: undefined, // could be configurable in the future
+    }];
+
+
+  // [Moonshot] Kimi's $web_search builtin function
+  if (openAIDialect === 'moonshot' && model.vndMoonshotWebSearch === 'auto' && !skipWebSearchDueToCustomTools)
+    payload.tools = [...(payload.tools || []), {
+      type: 'builtin_function',
+      function: {
+        name: '$web_search',
+      },
+    }];
+
+  // [Perplexity] Vendor-specific extensions for search models
+  if (openAIDialect === 'perplexity') {
+    // Reasoning effort (reuses OpenAI parameter)
+    if (reasoningEffort) {
+      if (reasoningEffort === 'none' || reasoningEffort === 'minimal' || reasoningEffort === 'xhigh' || reasoningEffort === 'max') // domain validation
+        throw new Error(`Perplexity does not support '${reasoningEffort}' reasoning effort`);
+      payload.reasoning_effort = reasoningEffort satisfies 'low' | 'medium' | 'high'; // TS narrowing of the 3 values supported by Perplexity
+    }
+
+    // Search mode (academic filter)
+    if (model.vndPerplexitySearchMode && model.vndPerplexitySearchMode !== 'default') {
+      payload.search_mode = model.vndPerplexitySearchMode;
+    }
+
+    // Date range filter
+    if (model.vndPerplexityDateFilter && model.vndPerplexityDateFilter !== 'unfiltered') {
+      const filter = _convertPerplexityDateFilter(model.vndPerplexityDateFilter);
+      if (filter) payload.search_after_date_filter = filter;
+    }
+  }
+
+  // [OpenRouter, 2025-11-11] Unified reasoning parameter - supports both token-based and effort-based control
+  if (openAIDialect === 'openrouter') {
+
+    // Anthropic via OpenRouter - incl: https://openrouter.ai/docs/guides/guides/model-migrations/claude-4-6-opus
+    const isTunneledAnt = model.id.startsWith('anthropic/');
+    const isTunneledGemini = model.id.startsWith('google/');
+    if (isTunneledAnt) {
+      // Effort -> OpenRouter verbosity -> Anthropic upstream output_config.effort
+      // OR verbosity supports low/medium/high/xhigh/max (2026-04-16). 'none'/'minimal' are OpenAI-only.
+      const antEffort = model.reasoningEffort; // ?? model.vndAntEffort;
+      if (antEffort) {
+        if (antEffort === 'none' || antEffort === 'minimal') // domain validation
+          throw new Error(`OpenRouter->Anthropic API does not support '${antEffort}' reasoning effort`);
+        payload.verbosity = antEffort;
+      }
+
+      // Thinking budget -> OpenRouter reasoning
+      // vndAntThinkingBudget's presence indicates a user preference:
+      // - 'adaptive': adaptive thinking (4.6+) - reasoning enabled, no explicit budget
+      // - a number: explicit token budget (1024-32000)
+      // - null: disable thinking (don't set reasoning field)
+      if (model.vndAntThinkingBudget === 'adaptive') {
+        payload.reasoning = { enabled: true };
+        delete payload.temperature;
+      } else if (typeof model.vndAntThinkingBudget === 'number') {
+        payload.reasoning = { enabled: true, max_tokens: model.vndAntThinkingBudget };
+        delete payload.temperature;
+      } else /* null or undefined */ {
+        // NOTE: with thinking disabled (null), we can still use temperature, so we don't delete it
+        //       see the note on llms.parameters.ts: 'llmVndAntThinkingBudget'
+      }
+    }
+    // Gemini via OpenRouter - budget-based (2.5) or level-based (3.0+)
+    else if (isTunneledGemini) {
+      if (model.vndGeminiThinkingBudget !== undefined) {
+        payload.reasoning = { enabled: true, max_tokens: model.vndGeminiThinkingBudget };
+      } else {
+        const gemEffort = model.reasoningEffort; // ?? model.vndGeminiThinkingLevel;
+        if (gemEffort) {
+          if (gemEffort === 'none' || gemEffort === 'xhigh' || gemEffort === 'max') // domain validation
+            throw new Error(`OpenRouter->Gemini API does not support '${gemEffort}' reasoning effort`);
+          payload.reasoning = { enabled: true, effort: gemEffort };
+        }
+      }
+    }
+    // OpenAI-compatible (including deepseek, moonshotai, x-ai, z-ai) via OpenRouter - all effort levels including 'none' and 'minimal' are valid (not max, that's just for Anthropic via verbosity)
+    else if (reasoningEffort) {
+      if (reasoningEffort === 'max') // domain validation
+        throw new Error(`OpenRouter->OpenAI API does not support '${reasoningEffort}' reasoning effort`);
+      payload.reasoning = { enabled: reasoningEffort !== 'none', effort: reasoningEffort };
+    }
+
+    // FIX double-reasoning request - remove reasoning_effort after transferring it to reasoning (unless already set)
+    if (payload.reasoning_effort) {
+      // we don't know which one takes precedence, so we prioritize .reasoning (OpenRouter) even if .reasoning_effort (OpenAI) is present
+      if (!payload.reasoning)
+        payload.reasoning = { effort: payload.reasoning_effort };
+      // Fix for `Only one of "reasoning" and "reasoning_effort" may be provided`
+      delete payload.reasoning_effort;
+    }
+
+  }
+
+  // [OpenAI, 2026-02-04] max_tokens is deprecated for all OpenAI models - use max_completion_tokens
+  if (hotFixUseMaxCompletionTokens)
+    payload = _fixUseMaxCompletionTokens(payload);
+
+  // [OpenAI] o-family/reasoning models: remove temperature and top_p controls
+  if (hotFixOpenAIOFamily)
+    payload = _fixRemoveTemperatureAndTopP(payload);
+
+  if (hotFixRemoveStreamOptions)
+    payload = _fixRemoveStreamOptions(payload);
+
+
+  // Preemptive error detection with server-side payload validation before sending it upstream
+  const validated = OpenAIWire_API_Chat_Completions.Request_schema.safeParse(payload);
+  if (!validated.success) {
+    console.warn('[DEV] OpenAI: invalid chatCompletions payload. Error:', { valError: validated.error });
+    throw new Error(`Invalid request for OpenAI-compatible models: ${z.prettifyError(validated.error)}`);
+  }
+
+  // if (hotFixUseDeprecatedFunctionCalls)
+  //   validated.data = _fixUseDeprecatedFunctionCalls(validated.data);
+
+  return validated.data;
+}
+
+
+function _fixAlternateUserAssistantRoles(chatMessages: TRequestMessages): TRequestMessages {
+
+  // [Perplexity, 2025-06-23] HotFix: if there's only 1 message from the system, treat it as a user message
+  if (chatMessages.length === 1 && chatMessages[0].role === 'system')
+    return [{ ...chatMessages[0], role: 'user' }];
+
+  // [Perplexity, 2025-06-23] HotFix: if an assistant message comes before the first user message, we prepend an empty user message
+  const firstUserIndex = chatMessages.findIndex(message => message.role === 'user');
+  const firstAssistantIndex = chatMessages.findIndex(message => message.role === 'assistant');
+  if (firstAssistantIndex !== -1 && firstAssistantIndex < firstUserIndex)
+    chatMessages.splice(firstAssistantIndex, 0, { role: 'user', content: [{ type: 'text', text: '' }] });
+
+  return chatMessages.reduce((acc, historyItem) => {
+
+    // treat intermediate system messages as user messages
+    if (acc.length > 0 && historyItem.role === 'system') {
+      historyItem = {
+        ...historyItem,
+        role: 'user',
+      };
+    }
+
+    // If current item has the same role as the last, coalesce ONLY assistant/user.
+    // Tool/system/developer must stay separate - tool messages each pair with a tool_call_id; merging corrupts the protocol.
+    if (acc.length > 0) {
+      const lastItem = acc[acc.length - 1];
+      if (lastItem.role === historyItem.role) {
+        if (lastItem.role === 'assistant') {
+          lastItem.content += hotFixSquashTextSeparator + historyItem.content;
+          return acc;
+        }
+        if (lastItem.role === 'user') {
+          lastItem.content = [
+            ...(Array.isArray(lastItem.content) ? lastItem.content : [OpenAIWire_ContentParts.TextContentPart(lastItem.content)]),
+            ...(Array.isArray(historyItem.content) ? historyItem.content : historyItem.content ? [OpenAIWire_ContentParts.TextContentPart(historyItem.content)] : []),
+          ];
+          return acc;
+        }
+        // fall through to push for tool/system/developer - each stays its own message
+      }
+    }
+
+    // if it's not a case for concatenation, just push the current item to the accumulator
+    acc.push(historyItem);
+    return acc;
+  }, [] as TRequestMessages);
+}
+
+function _fixRemoveEmptyMessages(chatMessages: TRequestMessages): TRequestMessages {
+  return chatMessages.filter(message => {
+    const c = message.content;
+    if (c === null || c === '') return false;
+    if (typeof c === 'string' && !c.trim()) return false; // whitespace-only (e.g. '\n\n' from Anthropic)
+    if (Array.isArray(c) && c.every(part => part.type === 'text' && !part.text.trim())) return false; // all-empty text parts
+    return true;
+  });
+}
+
+/** [OpenAI, 2026-02-04] max_tokens fully deprecated - convert to max_completion_tokens for all OpenAI models */
+function _fixUseMaxCompletionTokens(payload: TRequest): TRequest {
+  const { max_tokens, ...rest } = payload;
+  if (max_tokens)
+    rest.max_completion_tokens = max_tokens;
+  return rest;
+}
+
+/** [OpenAI] o-family and reasoning models don't support temperature/top_p controls */
+function _fixRemoveTemperatureAndTopP(payload: TRequest): TRequest {
+  const { temperature: _removeTemperature, top_p: _removeTopP, ...rest } = payload;
+  return rest;
+}
+
+function _fixRemoveStreamOptions(payload: TRequest): TRequest {
+  const { stream_options, parallel_tool_calls, ...rest } = payload;
+  return rest;
+}
+
+function _fixVndOaiRestoreMarkdown_Inline(payload: TRequest) {
+
+  // OpenAI - https://platform.openai.com/docs/guides/reasoning/advice-on-prompting#advice-on-prompting
+  //
+  // As of 2025-01-12, OpenAI states: << Markdown formatting: Starting with o1-2024-12-17,
+  // o1 models in the API will avoid generating responses with markdown formatting.
+  // To signal to the model when you do want markdown formatting in the response,
+  // include the string Formatting re-enabled on the first line of your developer message. >>
+  //
+  // This function prepends "Formatting re-enabled" to the first user message, if not already present
+  if (payload.messages?.length) {
+    const firstMessage = payload.messages[0];
+    const isDevOrSystem = firstMessage.role === 'developer' || firstMessage.role === 'system';
+
+    // update the text of the developer message
+    if (isDevOrSystem && firstMessage.content && !firstMessage.content.split('\n')[0].includes('Formatting re-enabled')) {
+      firstMessage.content = 'Formatting re-enabled\n' + firstMessage.content;
+    }
+    // if the developer message is missing, add it altogether
+    else if (!isDevOrSystem) {
+      // prepend to the first user message
+      payload.messages.unshift({ role: 'developer', content: 'Formatting re-enabled' });
+    }
+  }
+
+}
+
+/*function _fixUseDeprecatedFunctionCalls(payload: OpenaiWire_ChatCompletionRequest): OpenaiWire_ChatCompletionRequest {
+  // Hack the request to rename the parameters - without checking or anything - real hack
+  const { tools, tool_choice, ...rest } = payload;
+  if (tools?.length)
+    (rest as any).functions = tools.map(tool => {
+      if (tool.type !== 'function')
+        throw new Error('Unsupported tool type');
+      return { ...tool.function };
+    });
+  if (tool_choice)
+    (rest as any).function_call = tool_choice === 'none' ? 'none' : typeof tool_choice === 'object' ? { name: tool_choice.function.name } : 'auto';
+  console.log('HACKED:', rest, tools, tool_choice);
+  return rest;
+}*/
+
+
+function _toOpenAIMessages(openAIDialect: OpenAIDialects, systemMessage: AixMessages_SystemMessage | null, chatSequence: AixMessages_ChatMessage[], hotFixOpenAIo1Family: boolean): TRequestMessages {
+
+  // [DeepSeek, 2026-04-24] V4 thinking-by-default - reasoning_content must round-trip on tool-call turns; payload is the 'ma' part's aText (unlike Gemini/OpenAI-Responses which carry opaque handles).
+  const echoDeepseekReasoning = openAIDialect === 'deepseek';
+
+  // Transform the chat messages into OpenAI's format (an array of 'system', 'user', 'assistant', and 'tool' messages)
+  const chatMessages: TRequestMessages = [];
+
+  // Convert the system message - single-part stay as-is and multi-part (text or doc) are flattened to a string
+  const msg0TextParts: OpenAIWire_ContentParts.TextContentPart[] = [];
+  systemMessage?.parts.forEach((part) => {
+    switch (part.pt) {
+      case 'text':
+        msg0TextParts.push(OpenAIWire_ContentParts.TextContentPart(part.text));
+        break;
+
+      case 'doc':
+        msg0TextParts.push(aixDocPart_to_OpenAITextContent(part));
+        break;
+
+      case 'inline_image':
+        // we have already removed image parts from the system message
+        throw new Error('OpenAI ChatCompletions: images have to be in user messages, not in system message');
+
+      case 'meta_cache_control':
+        // ignore this breakpoint hint - Anthropic only
+        break;
+
+      default:
+        const _exhaustiveCheck: never = part;
+        throw new Error(`Unsupported part type in System message: ${(part as any).pt}`);
+    }
+  });
+
+  // Add the system message
+  if (msg0TextParts.length)
+    chatMessages.push({
+      /**
+       * Notes:
+       * o1Family in this case is not o1-preview as it's sporting the Sys0ToUsr0 hotfix
+       * o3-mini accepts both system and developer roles, and they seem to have the same effects
+       */
+      role: !hotFixOpenAIo1Family ? 'system' : 'developer',
+      content: aixTexts_to_OpenAIInstructionText(msg0TextParts.map(text => text.text)),
+    });
+
+
+  // Convert the messages
+  let allowAppend = true;
+  for (const aixMessage of chatSequence) {
+    const { parts, role } = aixMessage;
+    switch (role) {
+
+      case 'user':
+        for (const part of parts) {
+          const currentMessage = chatMessages[chatMessages.length - 1];
+          switch (part.pt) {
+
+            case 'text':
+              const textContentPart = OpenAIWire_ContentParts.TextContentPart(part.text);
+
+              // Append to existing content[], or new message
+              if (allowAppend && currentMessage?.role === 'user' && Array.isArray(currentMessage.content))
+                currentMessage.content.push(textContentPart);
+              else
+                chatMessages.push({ role: 'user', content: hotFixPreferArrayUserContent ? [textContentPart] : textContentPart.text });
+              allowAppend = true;
+              break;
+
+            case 'doc':
+              const docContentPart = aixDocPart_to_OpenAITextContent(part);
+
+              // Append to existing content[], or new message
+              if (allowAppend && currentMessage?.role === 'user' && Array.isArray(currentMessage.content))
+                currentMessage.content.push(docContentPart);
+              else
+                chatMessages.push({ role: 'user', content: hotFixPreferArrayUserContent ? [docContentPart] : docContentPart.text });
+              allowAppend = true;
+              break;
+
+            case 'inline_image':
+              // create a new OpenAIWire_ImageContentPart
+              const { mimeType, base64 } = part;
+              const base64DataUrl = `data:${mimeType};base64,${base64}`;
+              const imageContentPart = OpenAIWire_ContentParts.ImageContentPart(base64DataUrl, hotFixForceImageContentPartOpenAIDetail);
+
+              // Append to existing content[], or new message
+              if (allowAppend && currentMessage?.role === 'user' && Array.isArray(currentMessage.content))
+                currentMessage.content.push(imageContentPart);
+              else
+                chatMessages.push({ role: 'user', content: [imageContentPart] });
+              allowAppend = true;
+              break;
+
+            case 'meta_cache_control':
+              // ignore this breakpoint hint - Anthropic only
+              break;
+
+            case 'meta_in_reference_to':
+              chatMessages.push({
+                role: !hotFixOpenAIo1Family ? 'system' : 'user', // NOTE: o1Family does not support system messages for this, we downcast to 'user'
+                content: aixMetaRef_to_OpenAIText(part),
+              });
+              break;
+
+            default:
+              const _exhaustiveCheck: never = part;
+              throw new Error(`Unsupported part type in User message: ${(part as any).pt}`);
+          }
+        }
+
+        // If this message shall be flushed, disallow append once next
+        allowAppend = !aixSpillShallFlush(aixMessage);
+        break;
+
+      case 'model':
+        // Accumulate 'ma' reasoning text across this turn; echoed below onto the assistant message if it carries tool_calls (DeepSeek only).
+        let pendingReasoningText = '';
+        for (const part of parts) {
+          const currentMessage = chatMessages[chatMessages.length - 1];
+          switch (part.pt) {
+
+            case 'text':
+              // create a new OpenAIWire_AssistantMessage
+              chatMessages.push({ role: 'assistant', content: part.text });
+              break;
+
+            case 'inline_audio':
+              // Implementation notes
+              // - audio parts are not supported on the assistant side, but on the user side, so we
+              //   create a user part instead
+
+              // create a new OpenAI_AudioContentPart of type User
+              const audioFormat = aixAudioPart_to_OpenAIAudioFormat(part);
+              const audioBase64DataUrl = `data:${part.mimeType};base64,${part.base64}`;
+              const audioContentPart = OpenAIWire_ContentParts.OpenAI_AudioContentPart(audioBase64DataUrl, audioFormat);
+
+              // Append to existing content[], or new message
+              if (currentMessage?.role === 'user' && Array.isArray(currentMessage.content))
+                currentMessage.content.push(audioContentPart);
+              else
+                chatMessages.push({ role: 'user', content: [audioContentPart] });
+              break;
+
+            case 'inline_image':
+              // Implementation notes
+              // - image parts are not supported on the assistant side, but on the user side, so we
+              //   create a user part instead
+              // - we use the 'high' detail level for the image content part (how to expose to the user?)
+
+              // create a new OpenAIWire_ImageContentPart of type User
+              const imageBase64DataUrl = `data:${part.mimeType};base64,${part.base64}`;
+              const imageContentPart = OpenAIWire_ContentParts.ImageContentPart(imageBase64DataUrl, hotFixForceImageContentPartOpenAIDetail);
+
+              // Append to existing content[], or new message
+              if (currentMessage?.role === 'user' && Array.isArray(currentMessage.content))
+                currentMessage.content.push(imageContentPart);
+              else
+                chatMessages.push({ role: 'user', content: [imageContentPart] });
+              break;
+
+            case 'tool_invocation':
+              // Implementation notes
+              // - the assistant called the tool (this is the invocation params) without text beforehand
+              // - we will append to an existing assistant message, if there's space for a tool invocation
+              // - otherwise we'll add an assistant message with null message
+
+              // create a new OpenAIWire_ToolCall (specialized to function)
+              const invocation = part.invocation;
+              let toolCallPart;
+              switch (invocation.type) {
+                case 'function_call':
+                  toolCallPart = OpenAIWire_ContentParts.PredictedFunctionCall(part.id, invocation.name, invocation.args || '');
+                  break;
+                case 'code_execution':
+                  toolCallPart = OpenAIWire_ContentParts.PredictedFunctionCall(part.id, 'execute_code' /* suboptimal */, invocation.code || '');
+                  break;
+                default:
+                  const _exhaustiveCheck: never = invocation;
+                  throw new Error(`Unsupported tool call type in Model message: ${(part as any).pt}`);
+              }
+
+              // Append to existing content[], or new message
+              if (currentMessage?.role === 'assistant') {
+                if (!Array.isArray(currentMessage.tool_calls))
+                  currentMessage.tool_calls = [toolCallPart];
+                else
+                  currentMessage.tool_calls.push(toolCallPart);
+              } else
+                chatMessages.push({ role: 'assistant', content: null, tool_calls: [toolCallPart] });
+              break;
+
+            case 'ma':
+              // [DeepSeek only] accumulate reasoning text for the echo-back below. Other dialects ignore 'ma' (reasoning continuity flows via _vnd opaque handles, not via this adapter).
+              if (echoDeepseekReasoning && part.aType === 'reasoning' && part.aText)
+                pendingReasoningText += part.aText;
+              break;
+
+            case 'tool_response':
+              const toolErrorPrefix = part.error ? (typeof part.error === 'string' ? `[ERROR] ${part.error} - ` : '[ERROR] ') : '';
+              if (part.response.type === 'function_call' || part.response.type === 'code_execution')
+                chatMessages.push(OpenAIWire_Messages.ToolMessage(part.id, toolErrorPrefix + part.response.result));
+              else
+                throw new Error(`Unsupported tool response type in Model message: ${(part as any).pt}`);
+              break;
+
+            case 'meta_cache_control':
+              // ignore this breakpoint hint - Anthropic only
+              break;
+
+            default:
+              const _exhaustiveCheck: never = part;
+              throw new Error(`Unsupported part type in Model message: ${(part as any).pt}`);
+          }
+
+        }
+
+        // [DeepSeek] attach accumulated reasoning to this turn's assistant message only if it carries tool_calls; plain-text turns don't need the echo per docs.
+        if (echoDeepseekReasoning && pendingReasoningText) {
+          for (let i = chatMessages.length - 1; i >= 0; i--) {
+            const m = chatMessages[i];
+            if (m.role !== 'assistant') continue;
+            if (m.tool_calls?.length)
+              m.reasoning_content = pendingReasoningText;
+            break; // stop at the most recent assistant message from this turn
+          }
+        }
+
+        break;
+    }
+  }
+
+  return chatMessages;
+}
+
+function _toOpenAITools(itds: AixTools_ToolDefinition[], strictToolInvocations: boolean): NonNullable<TRequest['tools']> {
+  return itds.map(itd => {
+    const itdType = itd.type;
+    switch (itdType) {
+
+      case 'function_call':
+        const { name, description, input_schema } = itd.function_call;
+        return {
+          type: 'function',
+          function: {
+            name: name,
+            description: description,
+            parameters: {
+              type: 'object',
+              properties: input_schema?.properties ?? {},
+              required: input_schema?.required,
+              ...(strictToolInvocations ? { additionalProperties: false } : {}), // required for strict tool invocations
+            },
+            ...(strictToolInvocations ? { strict: true } : {}), // enable strict (grammar-constrained) tool invocation inputs
+          },
+        };
+
+      case 'code_execution':
+        throw new Error('Gemini code interpreter is not supported');
+
+      default:
+        // const _exhaustiveCheck: never = itdType;
+        throw new Error(`OpenAI (classic API) unsupported tool: ${itdType}`);
+
+    }
+  });
+}
+
+function _toOpenAIToolChoice(openAIDialect: OpenAIDialects, itp: AixTools_ToolsPolicy): NonNullable<TRequest['tool_choice']> {
+  // [Mistral] - supports 'auto', 'none', 'any'
+  if (openAIDialect === 'mistral' && itp.type !== 'auto') {
+    // Note: we tried adding the 'any' model, but don't feel comfortable with altering our good parsers
+    // to allow for Mistral's deviation from the de-facto norm set by the OpenAI protocol.
+    throw new Error('We only support automatic tool selection for Mistral models');
+  }
+
+  // NOTE: OpenAI has an additional policy 'none', which we don't have as it behaves like passing no tools at all.
+  //       Passing no tools is mandated instead of 'none'.
+  switch (itp.type) {
+    case 'auto':
+      return 'auto';
+    case 'any':
+      return 'required';
+    case 'function_call':
+      return { type: 'function' as const, function: { name: itp.function_call.name } };
+  }
+}
+
+
+// Approximate conversions
+
+export function aixAudioPart_to_OpenAIAudioFormat(part: AixParts_InlineAudioPart) {
+  const audioMimeType = part.mimeType;
+  switch (audioMimeType) {
+    case 'audio/wav':
+      return 'wav';
+    case 'audio/mp3':
+      return 'mp3';
+    default:
+      const _exhaustiveCheck: never = audioMimeType;
+      throw new Error(`Unsupported inline audio format: ${audioMimeType}`);
+  }
+}
+
+export function aixMetaRef_to_OpenAIText(irt: AixParts_MetaInReferenceToPart): string {
+  // Get the item texts without roles
+  const items = irt.referTo.map(r => r.mText);
+  if (items.length === 0)
+    return 'CONTEXT: The user provides no specific references.';
+
+  const isShortItem = (text: string): boolean =>
+    text.split('\n').length <= 3 && text.length <= 200;
+
+  const formatItem = (text: string, index?: number): string => {
+    if (isShortItem(text)) {
+      const formatted = text.replace(/\n/g, ' ').replace(/\s+/g, ' ');
+      return index !== undefined ? `${index + 1}. "${formatted}"` : `"${formatted}"`;
+    }
+    return `${index !== undefined ? `ITEM ${index + 1}:\n` : ''}---\n${text}\n---`;
+  };
+
+  // Formerly: `The user is referring to this in particular:\n{{ReplyToText}}`.replace('{{ReplyToText}}', part.replyTo);
+  if (items.length === 1)
+    return `CONTEXT: The user is referring to this in particular:\n${formatItem(items[0])}`;
+
+  const allShort = items.every(isShortItem);
+  return `CONTEXT: The user is referring to these ${items.length} in particular:\n\n${
+    items.map((text, index) => formatItem(text, index)).join(allShort ? '\n' : '\n\n')}`;
+}
+
+export function aixDocPart_to_OpenAITextContent(part: AixParts_DocPart): OpenAIWire_ContentParts.TextContentPart {
+
+  // Corner case, low probability: if the content is already enclosed in triple-backticks, return it as-is
+  if (part.data.text.startsWith('```'))
+    return OpenAIWire_ContentParts.TextContentPart(part.data.text);
+
+  return OpenAIWire_ContentParts.TextContentPart(approxDocPart_To_String(part));
+}
+
+export function aixTexts_to_OpenAIInstructionText(texts: string[]): string {
+  return texts.join(approxSystemMessageJoiner);
+}
+
+
+// Vendor specific extensions
+
+function _convertPerplexityDateFilter(filter: string): string {
+  const now = new Date();
+  switch (filter) {
+    case '1m':
+      return new Date(now.getFullYear(), now.getMonth() - 1, now.getDate()).toLocaleDateString('en-US');
+    case '3m':
+      return new Date(now.getFullYear(), now.getMonth() - 3, now.getDate()).toLocaleDateString('en-US');
+    case '6m':
+      return new Date(now.getFullYear(), now.getMonth() - 6, now.getDate()).toLocaleDateString('en-US');
+    case '1y':
+      return new Date(now.getFullYear() - 1, now.getMonth(), now.getDate()).toLocaleDateString('en-US');
+    default:
+      console.warn('[DEV] Perplexity date filter not recognized:', filter);
+      return '';
+  }
+}
+

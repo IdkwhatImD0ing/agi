@@ -1,10 +1,11 @@
-import { v4 as uuidv4 } from 'uuid';
-import { z } from 'zod';
+import * as z from 'zod/v4';
 
 import { LinkStorageDataType, LinkStorageVisibility } from '@prisma/client';
 
 import { prismaDb } from '~/server/prisma/prismaDb';
-import { publicProcedure } from '~/server/api/trpc.server';
+import { publicProcedure } from '~/server/trpc/trpc.server';
+
+import { agiUuid } from '~/common/util/idUtils';
 
 
 // configuration
@@ -14,14 +15,13 @@ const DEFAULT_EXPIRES_SECONDS = 60 * 60 * 24 * 30; // 30 days
 /// Zod schemas
 
 const dataTypesSchema = z.enum([LinkStorageDataType.CHAT_V1]);
-const dataSchema = z.object({}).passthrough();
 
 
 const storagePutInputSchema = z.object({
   ownerId: z.string().optional(),
   dataType: dataTypesSchema,
   dataTitle: z.string().optional(),
-  dataObject: dataSchema,
+  dataObject: z.any(), // was .passthrough()
   expiresSeconds: z.number().optional(),
 });
 
@@ -51,7 +51,7 @@ export const storageGetOutputSchema = z.union([
     type: z.literal('success'),
     dataType: dataTypesSchema,
     dataTitle: z.string().nullable(),
-    dataObject: dataSchema,
+    dataObject: z.any(), // was .passthrough()
     storedAt: z.date(),
     expiresAt: z.date().nullable(),
   }),
@@ -112,7 +112,8 @@ export const storagePutProcedure =
           deletionKey: true,
         },
         data: {
-          ownerId: ownerId || uuidv4(),
+          id: agiUuid('server-storage-id'),
+          ownerId: ownerId || agiUuid('server-storage-owner'),
           visibility: LinkStorageVisibility.UNLISTED,
           dataType,
           dataTitle,
@@ -121,7 +122,7 @@ export const storagePutProcedure =
           expiresAt: expiresSeconds === 0
             ? undefined // never expires
             : new Date(Date.now() + 1000 * (expiresSeconds || DEFAULT_EXPIRES_SECONDS)), // default
-          deletionKey: uuidv4(),
+          deletionKey: agiUuid('server-storage-deletion-key'),
           isDeleted: false,
         },
       });

@@ -1,32 +1,27 @@
-import { TogetherIcon } from '~/common/components/icons/vendors/TogetherIcon';
-
 import type { IModelVendor } from '../IModelVendor';
-import type { OpenAIAccessSchema } from '../../server/openai/openai.router';
+import type { OpenAIAccessSchema } from '../../server/openai/openai.access';
 
-import { LLMOptionsOpenAI, ModelVendorOpenAI } from '../openai/openai.vendor';
-import { OpenAILLMOptions } from '../openai/OpenAILLMOptions';
-
-import { TogetherAISourceSetup } from './TogetherAISourceSetup';
+import { ModelVendorOpenAI } from '../openai/openai.vendor';
 
 
-export interface SourceSetupTogetherAI {
+interface DTogetherAIServiceSettings {
   togetherKey: string;
   togetherHost: string;
   togetherFreeTrial: boolean;
+  csf?: boolean;
 }
 
-export const ModelVendorTogetherAI: IModelVendor<SourceSetupTogetherAI, OpenAIAccessSchema, LLMOptionsOpenAI> = {
+export const ModelVendorTogetherAI: IModelVendor<DTogetherAIServiceSettings, OpenAIAccessSchema> = {
   id: 'togetherai',
   name: 'Together AI',
-  rank: 17,
+  displayRank: 34,
+  displayGroup: 'cloud',
   location: 'cloud',
   instanceLimit: 1,
-  hasBackendCapKey: 'hasLlmTogetherAI',
+  hasServerConfigKey: 'hasLlmTogetherAI',
 
-  // components
-  Icon: TogetherIcon,
-  SourceSetupComponent: TogetherAISourceSetup,
-  LLMOptionsComponent: OpenAILLMOptions,
+  /// client-side-fetch ///
+  csfAvailable: _csfTogetherAIAvailable,
 
   // functions
   initializeSetup: () => ({
@@ -35,19 +30,19 @@ export const ModelVendorTogetherAI: IModelVendor<SourceSetupTogetherAI, OpenAIAc
     togetherFreeTrial: false,
   }),
   validateSetup: (setup) => {
-    return setup.togetherKey?.length >= 64;
+    return setup.togetherKey?.length >= 50;
   },
   getTransportAccess: (partialSetup) => ({
     dialect: 'togetherai',
+    clientSideFetch: _csfTogetherAIAvailable(partialSetup) && !!partialSetup?.csf,
     oaiKey: partialSetup?.togetherKey || '',
     oaiOrg: '',
     oaiHost: partialSetup?.togetherHost || '',
     heliKey: '',
-    moderationCheck: false,
   }),
 
-  // there is delay for OpenRouter Free API calls
-  getRateLimitDelay: (_llm, partialSetup) => {
+  // there is delay for Together Free API calls
+  rateLimitChatGenerate: async (_llm, partialSetup) => {
     const now = Date.now();
     const elapsed = now - nextGenerationTs;
     const wait = partialSetup?.togetherFreeTrial
@@ -57,19 +52,21 @@ export const ModelVendorTogetherAI: IModelVendor<SourceSetupTogetherAI, OpenAIAc
     if (elapsed < wait) {
       const delay = wait - elapsed;
       nextGenerationTs = now + delay;
-      return delay;
+      await new Promise(resolve => setTimeout(resolve, delay));
     } else {
       nextGenerationTs = now;
-      return 0;
     }
   },
 
 
   // OpenAI transport ('togetherai' dialect in 'access')
   rpcUpdateModelsOrThrow: ModelVendorOpenAI.rpcUpdateModelsOrThrow,
-  rpcChatGenerateOrThrow: ModelVendorOpenAI.rpcChatGenerateOrThrow,
-  streamingChatGenerateOrThrow: ModelVendorOpenAI.streamingChatGenerateOrThrow,
+
 };
 
 // rate limit timestamp
 let nextGenerationTs = 0;
+
+function _csfTogetherAIAvailable(s?: Partial<DTogetherAIServiceSettings>) {
+  return !!s?.togetherKey;
+}

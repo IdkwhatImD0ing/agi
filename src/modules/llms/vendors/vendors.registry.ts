@@ -1,106 +1,92 @@
+import type { AixAPI_Access } from '~/modules/aix/server/api/aix.wiretypes';
+
+import { ModelVendorAlibaba } from './alibaba/alibaba.vendor';
 import { ModelVendorAnthropic } from './anthropic/anthropic.vendor';
 import { ModelVendorAzure } from './azure/azure.vendor';
+import { ModelVendorBedrock } from './bedrock/bedrock.vendor';
+import { ModelVendorDeepseek } from './deepseek/deepseekai.vendor';
 import { ModelVendorGemini } from './gemini/gemini.vendor';
 import { ModelVendorGroq } from './groq/groq.vendor';
 import { ModelVendorLMStudio } from './lmstudio/lmstudio.vendor';
 import { ModelVendorLocalAI } from './localai/localai.vendor';
 import { ModelVendorMistral } from './mistral/mistral.vendor';
+import { ModelVendorMoonshot } from './moonshot/moonshot.vendor';
 import { ModelVendorOllama } from './ollama/ollama.vendor';
-import { ModelVendorOoobabooga } from './oobabooga/oobabooga.vendor';
 import { ModelVendorOpenAI } from './openai/openai.vendor';
+import { ModelVendorOpenPipe } from './openpipe/openpipe.vendor';
 import { ModelVendorOpenRouter } from './openrouter/openrouter.vendor';
 import { ModelVendorPerplexity } from './perplexity/perplexity.vendor';
 import { ModelVendorTogetherAI } from './togetherai/togetherai.vendor';
+import { ModelVendorXAI } from './xai/xai.vendor';
+import { ModelVendorZAI } from './zai/zai.vendor';
 
 import type { IModelVendor } from './IModelVendor';
-import { DLLMId, DModelSource, DModelSourceId, findLLMOrThrow, findSourceOrThrow } from '../store-llms';
-import { ModelVendorDeepseek } from './deepseek/deepseekai.vendor';
+
 
 export type ModelVendorId =
+  | 'alibaba'
   | 'anthropic'
   | 'azure'
+  | 'bedrock'
+  | 'deepseek'
   | 'googleai'
   | 'groq'
   | 'lmstudio'
   | 'localai'
   | 'mistral'
+  | 'moonshot'
   | 'ollama'
-  | 'oobabooga'
   | 'openai'
+  | 'openpipe'
   | 'openrouter'
   | 'perplexity'
   | 'togetherai'
-  | 'deepseek';
+  | 'xai'
+  | 'zai'
+  ;
 
-/** Global: Vendor Instances Registry **/
-const MODEL_VENDOR_REGISTRY: Record<ModelVendorId, IModelVendor> = {
+/** Global: Vendor Instances Registry (`satisfies` validates keys, TS preserves specific vendor types) **/
+const MODEL_VENDOR_REGISTRY = {
+  alibaba: ModelVendorAlibaba,
   anthropic: ModelVendorAnthropic,
   azure: ModelVendorAzure,
+  bedrock: ModelVendorBedrock,
+  deepseek: ModelVendorDeepseek,
   googleai: ModelVendorGemini,
   groq: ModelVendorGroq,
   lmstudio: ModelVendorLMStudio,
   localai: ModelVendorLocalAI,
   mistral: ModelVendorMistral,
+  moonshot: ModelVendorMoonshot,
   ollama: ModelVendorOllama,
-  oobabooga: ModelVendorOoobabooga,
   openai: ModelVendorOpenAI,
+  openpipe: ModelVendorOpenPipe,
   openrouter: ModelVendorOpenRouter,
   perplexity: ModelVendorPerplexity,
   togetherai: ModelVendorTogetherAI,
-  deepseek: ModelVendorDeepseek,
-} as Record<string, IModelVendor>;
+  xai: ModelVendorXAI,
+  zai: ModelVendorZAI,
+} as const satisfies Record<ModelVendorId, IModelVendor>;
 
-const MODEL_VENDOR_DEFAULT: ModelVendorId = 'openai';
+
+// --- Type Helpers - for Id -> concrete type mappings ---
+// NOTE: we haven't ported the full system to type inference, this is just a way forward
+export type ModelVendorOf<V extends ModelVendorId> = (typeof MODEL_VENDOR_REGISTRY)[V];
+export type ModelVendorAccessOf<V extends ModelVendorId> = ModelVendorOf<V> extends IModelVendor<any, infer TAccess> ? TAccess : never;
 
 
-export function findAllVendors(): IModelVendor[] {
+export function findAllModelVendors(): IModelVendor[] {
   const modelVendors = Object.values(MODEL_VENDOR_REGISTRY);
-  modelVendors.sort((a, b) => a.rank - b.rank);
+  modelVendors.sort((a, b) => a.displayRank - b.displayRank);
   return modelVendors;
 }
 
-export function findVendorById<TSourceSetup = unknown, TAccess = unknown, TLLMOptions = unknown>(
+export function findModelVendor<TServiceSettings extends object = {}, TAccess = AixAPI_Access>(
   vendorId?: ModelVendorId,
-): IModelVendor<TSourceSetup, TAccess, TLLMOptions> | null {
-  return vendorId ? (MODEL_VENDOR_REGISTRY[vendorId] as IModelVendor<TSourceSetup, TAccess, TLLMOptions>) ?? null : null;
+): IModelVendor<TServiceSettings, TAccess> | null {
+  return vendorId ? (MODEL_VENDOR_REGISTRY[vendorId] as IModelVendor<TServiceSettings, TAccess>) ?? null : null;
 }
 
-export function findVendorForLlmOrThrow<TSourceSetup = unknown, TAccess = unknown, TLLMOptions = unknown>(llmId: DLLMId) {
-  const llm = findLLMOrThrow<TSourceSetup, TLLMOptions>(llmId);
-  const vendor = findVendorById<TSourceSetup, TAccess, TLLMOptions>(llm?._source.vId);
-  if (!vendor) throw new Error(`Vendor not found for LLM ${llmId}`);
-  return { llm, vendor };
-}
-
-export function findAccessForSourceOrThrow<TSourceSetup = unknown, TAccess = unknown>(sourceId: DModelSourceId) {
-  const source = findSourceOrThrow<TSourceSetup>(sourceId);
-  const vendor = findVendorById<TSourceSetup, TAccess>(source.vId);
-  if (!vendor) throw new Error(`ModelSource ${sourceId} has no vendor`);
-  return { source, vendor, transportAccess: vendor.getTransportAccess(source.setup) };
-}
-
-export function createModelSourceForVendor(vendorId: ModelVendorId, otherSources: DModelSource[]): DModelSource {
-  // get vendor
-  const vendor = findVendorById(vendorId);
-  if (!vendor) throw new Error(`createModelSourceForVendor: Vendor not found for id ${vendorId}`);
-
-  // make a unique sourceId
-  let sourceId: DModelSourceId = vendorId;
-  let sourceN = 0;
-  while (otherSources.find(source => source.id === sourceId)) {
-    sourceN++;
-    sourceId = `${vendorId}-${sourceN}`;
-  }
-
-  // create the source
-  return {
-    id: sourceId,
-    label: vendor.name, // NOTE: will be (re/) numbered upon adding to the store
-    vId: vendorId,
-    setup: vendor.initializeSetup?.() || {},
-  };
-}
-
-export function createModelSourceForDefaultVendor(otherSources: DModelSource[]): DModelSource {
-  return createModelSourceForVendor(MODEL_VENDOR_DEFAULT, otherSources);
-}
+// export function getDefaultModelVendor(): IModelVendor {
+//   return MODEL_VENDOR_REGISTRY.openai;
+// }

@@ -1,0 +1,1176 @@
+import type { FileWithHandle } from 'browser-fs-access';
+
+import { callBrowseFetchPageOrThrow } from '~/modules/browse/browse.client';
+import { extractYoutubeVideoIDFromURL } from '~/modules/youtube/youtube.utils';
+import { imageCaptionFromImageOrThrow } from '~/modules/aifn/image-caption/imageCaptionFromImage';
+import { youTubeGetVideoData } from '~/modules/youtube/useYouTubeTranscript';
+
+import { PLATFORM_IMAGE_MIMETYPE } from '~/common/util/imageUtils';
+import { agiCustomId, agiUuid } from '~/common/util/idUtils';
+import { convert_Base64DataURL_To_Base64WithMimeType, convert_Base64WithMimeType_To_Blob } from '~/common/util/blobUtils';
+import { getDomainModelConfiguration } from '~/common/stores/llms/hooks/useModelDomain';
+import { htmlTableToMarkdown } from '~/common/util/htmlTableToMarkdown';
+import { humanReadableHyphenated } from '~/common/util/textUtils';
+import { ocrImageWithProgress, ocrPdfPagesWithProgress } from '~/common/util/ocrUtils';
+import { pdfToImageDataURLs, pdfToText } from '~/common/util/pdfUtils';
+
+import { createDMessageDataInlineText, createDocAttachmentFragment, DMessageAttachmentFragment, DMessageDataInline, DMessageDocPart, DVMimeType, isContentOrAttachmentFragment, isDocPart, specialContentPartToDocAttachmentFragment } from '~/common/stores/chat/chat.fragments';
+
+import type { AttachmentCreationOptions, AttachmentDraft, AttachmentDraftConverter, AttachmentDraftId, AttachmentDraftInput, AttachmentDraftSource, AttachmentDraftSourceOriginFile, DraftEgoFragmentsInputData, DraftWebInputData, DraftYouTubeInputData } from './attachment.types';
+import type { AttachmentsDraftsStore } from './store-attachment-drafts_slice';
+import { attachmentCloudConverterPrefix, attachmentCloudFetchFile, attachmentCloudGoogleWorkspaceExportMIME, CloudFetchError } from './attachment.cloud';
+import { attachmentGetLiveFileId, attachmentSourceSupportsLiveFile } from './attachment.livefile';
+import { guessInputContentTypeFromMime, heuristicMimeTypeFixup, mimeTypeIsDocX, mimeTypeIsPDF, mimeTypeIsPlainText, mimeTypeIsSupportedImage, reverseLookupMimeType } from './attachment.mimetypes';
+import { imageDataToImageAttachmentFragmentViaDBlob } from './attachment.dblobs';
+
+
+const PDF_IMAGE_PAGE_SCALE = 1.5;
+const PDF_IMAGE_QUALITY = 0.5;
+const ENABLE_TEXT_AND_IMAGES = false; // [PROD] ?
+const DOCPART_DEFAULT_VERSION = 1;
+
+// PDF text extraction quality thresholds
+const IMAGE_LOW_TEXT_THRESHOLD = 80; // chars per image - below this, consider the image as low-text (photo-like) rather than document-like
+const PDF_LOW_TEXT_THRESHOLD = 160; // chars per page - below this, consider the PDF as scanned/image-based
+const PDF_FALLBACK_MAX_IMAGES = 32; // max pages to convert to images when auto-falling back (to respect LLM limits)
+
+
+// internal mimes, only used to route data within us (source -> input -> converters)
+const INT_MIME_VND_AGI_EGO_FRAGMENTS = 'application/vnd.agi.ego.fragments';
+const INT_MIME_VND_AGI_WEBPAGE = 'application/vnd.agi.webpage';
+const INT_MIME_VND_AGI_YOUTUBE = 'application/vnd.agi.youtube';
+
+
+/**
+ * Creates a new AttachmentDraft object.
+ */
+export function attachmentCreate(source: AttachmentDraftSource): AttachmentDraft {
+  return {
+    id: agiUuid('attachment-draft'),
+    source: source,
+    label: 'Loading...',
+    ref: '',
+    inputLoading: false,
+    inputError: null,
+    input: undefined,
+    converters: [],
+    outputsConverting: false,
+    outputsConversionProgress: null,
+    outputFragments: [],
+    // metadata: {},
+  };
+}
+
+/**
+ * Asynchronously loads the input for an AttachmentDraft object.
+ *
+ * @param {Readonly<AttachmentDraftSource>} source - The source of the attachment.
+ * @param {(changes: Partial<AttachmentDraft>) => void} edit - A function to edit the AttachmentDraft object.
+ */
+export async function attachmentLoadInputAsync(source: Readonly<AttachmentDraftSource>, edit: (changes: Partial<Omit<AttachmentDraft, 'outputFragments'>>) => void) {
+  edit({ inputLoading: true });
+
+  const sourceMedia = source.media;
+  switch (sourceMedia) {
+
+    // Download URL (page, file, ..) and attach as input
+    case 'url':
+      edit({ label: source.refUrl, ref: source.refUrl });
+
+      // [YouTube] user is attaching a link to a video: try to download this as a transcript rather than a webpage
+      const asYoutubeVideoId = extractYoutubeVideoIDFromURL(source.refUrl);
+      if (asYoutubeVideoId) {
+        const videoData = await youTubeGetVideoData(asYoutubeVideoId).catch(console.warn);
+        if (videoData?.videoTitle && videoData?.transcript) {
+          edit({
+            label: videoData.videoTitle,
+            input: {
+              mimeType: INT_MIME_VND_AGI_YOUTUBE,
+              data: {
+                videoId: asYoutubeVideoId,
+                videoTitle: videoData.videoTitle,
+                videoDescription: videoData.videoDescription,
+                videoThumbnailUrl: videoData.thumbnailUrl,
+                videoTranscript: videoData.transcript,
+              },
+              urlImage: !videoData.thumbnailImage ? undefined : {
+                ...videoData.thumbnailImage,
+                generator: 'youtube-thumbnail',
+                timestamp: Date.now(),
+              },
+            },
+          });
+          break;
+        }
+      }
+
+      try {
+        // fetch the web page
+        const { title, content, file: urlFile, screenshot } = await callBrowseFetchPageOrThrow(
+          source.url, ['text', 'markdown', 'html'], { width: 512, height: 512, quality: 98 }, true,
+        );
+        if (content) {
+          const { html, markdown, text } = content;
+          if (html || markdown || text)
+            edit({
+              label: title || source.refUrl,
+              input: {
+                mimeType: INT_MIME_VND_AGI_WEBPAGE,
+                data: {
+                  pageText: text ?? undefined,
+                  pageMarkdown: markdown ?? undefined,
+                  pageCleanedHtml: html ?? undefined,
+                  pageTitle: title || undefined,
+                },
+                urlImage: !screenshot ? undefined : {
+                  ...screenshot,
+                  generator: 'web-capture',
+                  timestamp: Date.now(),
+                },
+              },
+            });
+          else
+            edit({ inputError: 'No content found at this link' });
+        } else if (urlFile) {
+          try {
+            const urlBlob = await convert_Base64WithMimeType_To_Blob(urlFile.data, urlFile.mimeType, 'attachment-draft-load-input');
+            edit({
+              label: urlFile.fileName || source.refUrl,
+              // ref: source.refUrl,
+              input: {
+                mimeType: urlFile.mimeType,
+                data: urlBlob,
+                dataSize: urlBlob.size,
+              },
+            });
+          } catch (error: any) {
+            edit({ inputError: `Issue downloading web file: ${error?.message || (typeof error === 'string' ? error : JSON.stringify(error))}` });
+          }
+        } else
+          edit({ inputError: 'No content or file found at this link' });
+      } catch (error: any) {
+        console.log('[DEV] Issue downloading page for attachment:', { error });
+        edit({ inputError: `Issue downloading page: ${error?.message || (typeof error === 'string' ? error : JSON.stringify(error))}` });
+      }
+      break;
+
+    // Attach file as input
+    case 'file':
+      edit({ label: source.refPath, ref: source.refPath });
+
+      // fix missing/wrong mimetypes
+      let fileMime: string | null = source.fileWithHandle.type;
+      const fileExtension = source.refPath.split('.').pop()?.toLowerCase() || undefined;
+      if (!fileMime) {
+        // see note on 'attachAppendDataTransfer'; this is a fallback for drag/drop missing Mimes sometimes
+        if (fileExtension)
+          fileMime = reverseLookupMimeType(fileExtension);
+
+        // unknown extension or missing extension and mime: falling back to text/plain
+        if (!fileMime) {
+          console.warn(`Assuming the attachment is text/plain. From: '${source.origin}', name: ${source.refPath}`);
+          fileMime = 'text/plain';
+        }
+      } else {
+        // WEAK - Fix wrongly assigned mimetypes - this is a hardcoded hack basically - please remove.
+        fileMime = heuristicMimeTypeFixup(fileMime, fileExtension);
+      }
+
+      // UX: just a hint of a loading state
+      // Note: disabled: the read operation will be async anyway, and
+      //       we don't want to delay too long in case of large drops.
+      // await new Promise(resolve => setTimeout(resolve, 50));
+
+      try {
+        edit({
+          input: {
+            mimeType: fileMime,
+            data: source.fileWithHandle, // FileWithHandle extends File extends Blob
+            dataSize: source.fileWithHandle.size,
+          },
+        });
+      } catch (error: any) {
+        const errorText = (error?.name === 'AbortError' && source.fileWithHandle.type === '')
+          ? 'unsupported file type or possible folder. For folders and LiveFile support, we recommend using Google Chrome.'
+          : `issue loading file: ${error?.message || (typeof error === 'string' ? error : JSON.stringify(error))}`;
+        edit({ inputError: errorText });
+      }
+      break;
+
+    case 'text':
+      // Obsidian URLs, for dragging: we won't be able to open them, so we'll show the input error instead
+      if (source.textPlain?.startsWith('obsidian://open?vault=')) {
+        edit({ label: 'Obsidian Issue', inputError: 'Drag and drop does not work with Obsidian URLs. Please open/attach the file, or drag it from finder/explorer, or paste the content.' });
+        break;
+      }
+
+      if (source.textHtml && source.textPlain) {
+        edit({
+          label: 'Rich Text',
+          ref: '',
+          input: {
+            mimeType: 'text/plain',
+            data: source.textPlain,
+            dataSize: source.textPlain!.length,
+            altMimeType: 'text/html',
+            altData: source.textHtml,
+          },
+        });
+      } else {
+        const text = source.textHtml || source.textPlain || '';
+        edit({
+          label: 'Text',
+          ref: '',
+          input: {
+            mimeType: 'text/plain',
+            data: text,
+            dataSize: text.length,
+          },
+        });
+      }
+      break;
+
+    case 'cloud':
+      const cloudLabel = source.fileName || 'Cloud File';
+      const cloudRef = source.webViewLink || `${source.provider}:${source.fileId}`;
+      edit({ label: cloudLabel, ref: cloudRef });
+
+      try {
+        // fetch / export to the destination mime
+        const exportMime = attachmentCloudGoogleWorkspaceExportMIME(source.mimeType);
+        const cloudBlob = await attachmentCloudFetchFile(source.provider, source.fileId, source.accessToken, exportMime);
+
+        // use export mime if we exported, otherwise use source or detected mime
+        const resultMime = exportMime || source.mimeType /* provided outside  */ || cloudBlob.type /* connection */ || 'application/octet-stream';
+
+        edit({
+          input: {
+            mimeType: resultMime,
+            data: cloudBlob,
+            dataSize: cloudBlob.size,
+          },
+        });
+      } catch (error: unknown) {
+        const errorMessage = error instanceof CloudFetchError
+          ? `${error.code}: ${error.details || error.message}`
+          : `Failed to download: ${error instanceof Error ? error.message : String(error)}`;
+        edit({ inputError: errorMessage });
+      }
+      break;
+
+    case 'ego':
+      edit({
+        label: source.label,
+        ref: `${source.egoFragmentsInputData.messageId} - ${source.egoFragmentsInputData.conversationTitle}`,
+        input: {
+          mimeType: INT_MIME_VND_AGI_EGO_FRAGMENTS,
+          data: source.egoFragmentsInputData,
+        },
+      });
+      break;
+
+    default:
+      const _exhaustiveCheck: never = sourceMedia;
+      break;
+  }
+
+  edit({ inputLoading: false });
+}
+
+
+/**
+ * Defines the possible converters for an AttachmentDraft object based on its input type.
+ *
+ * @param {Readonly<AttachmentDraftSource>} source - The source of the AttachmentDraft object.
+ * @param {Readonly<AttachmentDraftInput>} input - The input of the AttachmentDraft object.
+ * @param options conversion preferences, if any
+ * @param {(changes: Partial<AttachmentDraft>) => void} edit - A function to edit the AttachmentDraft object.
+ */
+export function attachmentDefineConverters(source: AttachmentDraftSource, input: Readonly<AttachmentDraftInput>, options: AttachmentCreationOptions, edit: (changes: Partial<Omit<AttachmentDraft, 'outputFragments'>>) => void) {
+
+  // return all the possible converters for the input
+  const converters: AttachmentDraftConverter[] = [];
+
+  const autoAddImages = ENABLE_TEXT_AND_IMAGES && !!options?.hintAddImages;
+  const fromCloud = source.media === 'cloud';
+
+  switch (true) {
+
+    // plain text types
+    case mimeTypeIsPlainText(input.mimeType):
+      // handle a secondary layer of HTML 'text' origins: drop, paste, and clipboard-read
+      const textOriginHtml = source.media === 'text' && input.altMimeType === 'text/html' && !!input.altData;
+      const textOriginClipboard = source.media === 'text' && ['clipboard-read', 'paste'].includes(source.method);
+      const isHtmlTable = !!input.altData?.startsWith('<table');
+
+      // p1: Tables
+      if (textOriginHtml && isHtmlTable)
+        converters.push({ id: 'rich-text-table', name: 'Markdown Table' });
+
+      // p2: Text
+      if (fromCloud && input.mimeType === 'text/markdown') {
+        converters.push({ id: 'text', name: 'Markdown' });
+      } else {
+        converters.push({ id: 'text', name: attachmentSourceSupportsLiveFile(source) ? 'Text (Live)' : 'Text' });
+        if (!textOriginHtml && textOriginClipboard) {
+          converters.push({ id: 'text-markdown', name: 'Text -> Markdown' });
+          converters.push({ id: 'text-cleaner', name: 'Text -> Clean HTML' });
+        }
+      }
+
+      // p3: Html -> Markdown, and Html
+      if (textOriginHtml) {
+        converters.push({ id: 'rich-text', name: 'HTML · Heavy' });
+        converters.push({ id: 'rich-text-markdown', name: 'HTML -> Markdown' });
+        converters.push({ id: 'rich-text-cleaner', name: 'HTML -> Clean HTML' });
+      }
+      break;
+
+    // Images (Known/Unknown)
+    case input.mimeType.startsWith('image/'):
+      const inputImageMimeSupported = mimeTypeIsSupportedImage(input.mimeType);
+      const visionModelMissing = !getDomainModelConfiguration('imageCaption', true, true);
+      converters.push({ id: 'image-resized-high', name: 'Image (high detail)', disabled: !inputImageMimeSupported });
+      converters.push({ id: 'image-resized-low', name: 'Image (low detail)', disabled: !inputImageMimeSupported });
+      converters.push({ id: 'image-original', name: 'Image (original quality)', disabled: !inputImageMimeSupported });
+      if (!inputImageMimeSupported)
+        converters.push({ id: 'image-to-default', name: `As Image (${PLATFORM_IMAGE_MIMETYPE})` });
+      converters.push({ id: 'image-caption', name: 'AI Caption (Text)', disabled: visionModelMissing });
+      converters.push({ id: 'unhandled', name: 'No Image' });
+      converters.push({ id: 'image-ocr', name: 'Add Text (OCR)', isCheckbox: true });
+      break;
+
+    // PDF
+    case mimeTypeIsPDF(input.mimeType):
+      converters.push({ id: 'pdf-auto', name: 'Auto', isActive: !autoAddImages });
+      converters.push({ id: 'pdf-text', name: 'PDF Text' });
+      converters.push({ id: 'pdf-images-ocr', name: 'PDF -> OCR (for scans)' });
+      converters.push({ id: 'pdf-images', name: 'PDF -> Images' });
+      converters.push({ id: 'pdf-text-and-images', name: 'PDF -> Text + Images', isActive: autoAddImages });
+      break;
+
+    // DOCX
+    case mimeTypeIsDocX(input.mimeType):
+      converters.push({ id: 'docx-to-html', name: 'DOCX to HTML' });
+      break;
+
+    // URL: custom converters because of a custom input structure with multiple inputs
+    case input.mimeType === INT_MIME_VND_AGI_WEBPAGE:
+      const pageData = input.data as DraftWebInputData;
+      const preferMarkdown = !!pageData.pageMarkdown;
+      if (pageData.pageText)
+        converters.push({ id: 'url-page-text', name: 'Text', isActive: !preferMarkdown });
+      if (pageData.pageMarkdown)
+        converters.push({ id: 'url-page-markdown', name: 'Markdown (suggested)', isActive: preferMarkdown });
+      if (pageData.pageCleanedHtml)
+        converters.push({ id: 'url-page-html', name: 'Clean HTML', isActive: !preferMarkdown && !pageData.pageText });
+      if (input.urlImage) {
+        if (converters.length)
+          converters.push({ id: 'url-page-null', name: 'Do not attach' });
+        converters.push({ id: 'url-page-image', name: 'Add Screenshot', disabled: !input.urlImage.width || !input.urlImage.height, isCheckbox: true, isActive: autoAddImages || undefined });
+      }
+      break;
+
+    // YouTube: custom converters
+    case input.mimeType === INT_MIME_VND_AGI_YOUTUBE:
+      converters.push({ id: 'youtube-transcript', name: 'Video Transcript', isActive: true });
+      converters.push({ id: 'youtube-transcript-simple', name: 'Video Transcript (simple)' });
+      if (input.urlImage)
+        converters.push({ id: 'url-page-image', name: 'Add Thumbnail', disabled: !input.urlImage.width || !input.urlImage.height, isCheckbox: true, isActive: autoAddImages });
+      break;
+
+    // EGO
+    case input.mimeType === INT_MIME_VND_AGI_EGO_FRAGMENTS:
+      converters.push({ id: 'ego-fragments-inlined', name: 'Message' });
+      break;
+
+    // catch-all
+    default:
+      converters.push({ id: 'unhandled', name: `${input.mimeType}`, unsupported: true });
+      converters.push({ id: 'text', name: 'As Text' });
+      break;
+  }
+
+  // cosmetic for cloud: prepend cloud label prefixes
+  const cloudLabelPrefix = source.media === 'cloud' ? attachmentCloudConverterPrefix(source.mimeType) : '';
+  if (cloudLabelPrefix)
+    for (const converter of converters)
+      converter.name = cloudLabelPrefix + converter.name;
+
+  edit({ converters });
+}
+
+
+function _lowCollisionRefString(prefix: string, digits: number): string {
+  return `${prefix} ${agiCustomId(digits)}`;
+}
+
+function _prepareDocData(source: AttachmentDraftSource, input: Readonly<AttachmentDraftInput>, converterName: string): {
+  title: string;
+  caption: string;
+  refString: string;
+  docMeta?: DMessageDocPart['meta'];
+} {
+  const inputMime = input.mimeType || '';
+  switch (source.media) {
+
+    // Downloaded URL as Text, Markdown, or HTML
+    case 'url':
+      let pageTitle =
+        inputMime === INT_MIME_VND_AGI_WEBPAGE ? (input.data as DraftWebInputData)?.pageTitle
+          : inputMime === INT_MIME_VND_AGI_YOUTUBE ? (input.data as DraftYouTubeInputData)?.videoTitle
+            : undefined;
+      if (!pageTitle)
+        pageTitle = `Web page: ${source.refUrl}`;
+      const urlRefString = inputMime === INT_MIME_VND_AGI_YOUTUBE ? 'youtube-' + (input.data as DraftYouTubeInputData)?.videoId : pageTitle;
+      return {
+        title: pageTitle,
+        caption: converterName,
+        refString: humanReadableHyphenated(urlRefString),
+      };
+
+    // File of various kinds and coming from various sources
+    case 'file':
+      const mayBeImage = inputMime.startsWith('image/');
+
+      let fileTitle = _lowCollisionRefString(mayBeImage ? 'Image' : 'File', 4);
+      let fileCaption = '';
+      const fileMeta: DMessageDocPart['meta'] = {
+        srcFileName: source.fileWithHandle.name || undefined,
+        srcFileSize: source.fileWithHandle.size || input.dataSize,
+      };
+
+      const sourceOrigin = source.origin;
+      switch (sourceOrigin) {
+        case 'camera':
+          fileTitle = source.refPath || _lowCollisionRefString('Camera Photo', 6);
+          break;
+        case 'screencapture':
+          fileTitle = source.refPath || _lowCollisionRefString('Screen Capture', 6);
+          fileCaption = 'Screen Capture';
+          break;
+        case 'file-open':
+          fileTitle = source.refPath || _lowCollisionRefString('Uploaded File', 6);
+          break;
+        case 'clipboard-read':
+        case 'paste':
+          fileTitle = source.refPath || _lowCollisionRefString('Pasted File', 6);
+          break;
+        case 'drop':
+          fileTitle = source.refPath || _lowCollisionRefString('Dropped File', 6);
+          break;
+        case 'live-feed-camera':
+        case 'live-feed-screen':
+          fileCaption = sourceOrigin === 'live-feed-camera' ? 'Live Camera' : 'Live Screen';
+          fileTitle = source.refPath || _lowCollisionRefString(fileCaption, 6);
+          break;
+        default:
+          const _exhaustiveCheck: never = sourceOrigin;
+          fileTitle = 'File';
+          break;
+      }
+      return {
+        title: fileTitle,
+        caption: fileCaption,
+        refString: humanReadableHyphenated(fileTitle),
+        docMeta: fileMeta,
+      };
+
+    // Text from clipboard, drop, or paste
+    case 'text':
+      const textRef = _lowCollisionRefString('doc', 6);
+      return {
+        title: converterName || 'Text',
+        caption: source.method === 'drop' ? 'Dropped' : 'Pasted',
+        refString: humanReadableHyphenated(textRef),
+      };
+
+    // Cloud files
+    case 'cloud':
+      const cloudFileName = source.fileName || 'Cloud File';
+      const cloudProviderLabel = source.provider === 'gdrive' ? 'Google Drive'
+        : source.provider === 'onedrive' ? 'OneDrive'
+          : source.provider === 'dropbox' ? 'Dropbox'
+            : 'Cloud';
+      const cloudRef = `${source.provider}-${source.fileName || _lowCollisionRefString('file', 6)}`;
+      return {
+        title: cloudFileName,
+        caption: `From ${cloudProviderLabel}`,
+        refString: humanReadableHyphenated(cloudRef),
+        // TODO: expand this to allow future redownload - or other location but for the same purpose
+        docMeta: {
+          srcFileName: source.fileName,
+          srcFileSize: source.fileSize || input.dataSize,
+        },
+      };
+
+    // The application attaching pieces of itself
+    case 'ego':
+      const egoKind = source.method === 'ego-fragments' ? 'Chat Message' : '';
+      return {
+        title: egoKind,
+        caption: 'From Chat: ' + source.egoFragmentsInputData.conversationTitle,
+        refString: humanReadableHyphenated(egoKind),
+      };
+  }
+}
+
+function _guessDocVDT(inputMimeType: string): DMessageDocPart['vdt'] {
+  if (!inputMimeType)
+    return DVMimeType.TextPlain;
+  const inputContentType = guessInputContentTypeFromMime(inputMimeType);
+  switch (inputContentType) {
+    case 'plain':
+    case 'markdown':
+      return DVMimeType.TextPlain;
+
+    case 'html':
+    case 'code':
+      return DVMimeType.VndAgiCode;
+
+    // these would have been converted - let's assume to code, but we don't return here as this code path won't happen
+    // case 'doc-pdf': // plain or OCR, or images
+    // case 'doc-msw': // code (html), or images
+    // case 'doc-msxl': // code (html), or images
+    // case 'doc-msppt': // code (html), or images
+    // case 'image': // images won't get in docs
+    // case 'audio': // same for audio
+    // case 'video': // and video
+    // case 'other': // and this even less
+  }
+  return DVMimeType.TextPlain;
+}
+
+
+/**
+ * Converts the input of an AttachmentDraft object based on the selected converter.
+ *
+ * @param {Readonly<AttachmentDraft>} attachment - The AttachmentDraft object to convert.
+ * @param edit - A function to edit the AttachmentDraft object.
+ * @param replaceOutputFragments - A function to replace the output fragments of the AttachmentDraft object.
+ */
+export async function attachmentPerformConversion(
+  attachment: Readonly<AttachmentDraft>,
+  edit: (attachmentDraftId: AttachmentDraftId, update: Partial<Omit<AttachmentDraft, 'outputFragments'>>) => void, /* AttachmentsDraftsStore['_editAttachment'] */
+  replaceOutputFragments: AttachmentsDraftsStore['_replaceAttachmentOutputFragments'],
+): Promise<void> {
+
+  // clear outputs
+  // NOTE: disabled, to keep the old conversions while converting to the new - keeps the UI less 'flashing'
+  // replaceOutputFragments(attachment.id, []);
+
+  // get converter
+  const { input, source } = attachment;
+  if (!input)
+    return;
+
+  edit(attachment.id, {
+    outputsConverting: true,
+    outputsConversionProgress: null,
+    outputWarnings: undefined,
+    outputsHeuristic: undefined,
+  });
+
+  // apply converter to the input
+  const newFragments: DMessageAttachmentFragment[] = [];
+  for (const converter of attachment.converters) {
+    if (!converter.isActive) continue;
+
+    // prepare the doc data
+    let { title, caption, refString, docMeta } = _prepareDocData(source, input, converter.name);
+
+    switch (converter.id) {
+
+      // text
+      case 'text':
+      case 'text-cleaner':
+      case 'text-markdown':
+        const possibleLiveFileId = await attachmentGetLiveFileId(source);
+        let textContent = await _inputDataToString(input.data, 'text');
+        let textContentMime = input.mimeType || 'text/plain';
+
+        switch (converter.id) {
+          case 'text-cleaner':
+            textContent = _cleanPossibleHtmlText(textContent);
+            break;
+          case 'text-markdown':
+            try {
+              const { convertHtmlToMarkdown } = await import('./file-converters/HtmlToMarkdown');
+              textContent = convertHtmlToMarkdown(textContent);
+              textContentMime = 'text/markdown';
+            } catch (error) {
+              console.log('[DEV] Error converting Text (HTML) to Markdown:', error);
+            }
+            break;
+        }
+
+        const textualInlineData = createDMessageDataInlineText(textContent, textContentMime);
+        newFragments.push(createDocAttachmentFragment(title, caption, _guessDocVDT(input.mimeType), textualInlineData, refString, DOCPART_DEFAULT_VERSION, docMeta, possibleLiveFileId));
+        break;
+
+      // html
+      case 'rich-text':
+      case 'rich-text-cleaner':
+      case 'rich-text-markdown':
+        let richText: string;
+        if (input.altData)
+          richText = input.altData;
+        else if (input.mimeType === 'text/html')
+          richText = await _inputDataToString(input.data, 'rich-text');
+        else
+          richText = '';
+        let richTextMimeType = 'text/html';
+
+        // html -> cleaner/html or markdown
+        switch (converter.id) {
+          case 'rich-text-cleaner':
+            richText = _cleanPossibleHtmlText(richText);
+            richTextMimeType = 'text/html';
+            break;
+          case 'rich-text-markdown':
+            try {
+              const { convertHtmlToMarkdown } = await import('./file-converters/HtmlToMarkdown');
+              richText = convertHtmlToMarkdown(richText);
+              richTextMimeType = 'text/markdown';
+            } catch (error) {
+              console.log('[DEV] Error converting HTML to Markdown:', error);
+            }
+            break;
+        }
+
+        // NOTE: before we had the following: createTextAttachmentFragment(ref || '\n<!DOCTYPE html>', input.altData!), which
+        //       was used to wrap the HTML in a code block to facilitate AutoRenderBlocks's parser. Historic note, for future debugging.
+        const richTextData = createDMessageDataInlineText(richText, richTextMimeType);
+        newFragments.push(createDocAttachmentFragment(title, caption, DVMimeType.VndAgiCode, richTextData, refString, DOCPART_DEFAULT_VERSION, docMeta));
+        break;
+
+      // html to markdown table
+      case 'rich-text-table':
+        let tableData: DMessageDataInline;
+        try {
+          const mdTable = htmlTableToMarkdown(input.altData!, false);
+          // fall back to source text if the table conversion produced empty/tiny content
+          if (mdTable.replace(/[\s|:\-]/g, '').length < 2) {
+            const fallbackText = await _inputDataToString(input.data, 'rich-text-table');
+            tableData = createDMessageDataInlineText(fallbackText || mdTable, input.mimeType);
+          } else {
+            tableData = createDMessageDataInlineText(mdTable, 'text/markdown');
+          }
+        } catch (error) {
+          // fallback to text/plain
+          const fallbackText = await _inputDataToString(input.data, 'rich-text-table');
+          tableData = createDMessageDataInlineText(fallbackText, input.mimeType);
+        }
+        newFragments.push(createDocAttachmentFragment(title, caption, tableData.mimeType === 'text/markdown' ? DVMimeType.TextPlain : DVMimeType.TextPlain, tableData, refString, DOCPART_DEFAULT_VERSION, docMeta));
+        break;
+
+
+      // image resized (default mime/quality, openai-high-res)
+      case 'image-resized-high':
+        if (!_expectBlob(input.data, 'image-resized')) return;
+        const imageHighF = await imageDataToImageAttachmentFragmentViaDBlob(input.mimeType, input.data, source, title, caption, false, 'openai-high-res');
+        if (imageHighF)
+          newFragments.push(imageHighF);
+        break;
+
+      // image resized (default mime/quality, openai-low-res)
+      case 'image-resized-low':
+        if (!_expectBlob(input.data, 'image-resized')) return;
+        const imageLowF = await imageDataToImageAttachmentFragmentViaDBlob(input.mimeType, input.data, source, title, caption, false, 'openai-low-res');
+        if (imageLowF)
+          newFragments.push(imageLowF);
+        break;
+
+      // image as-is
+      case 'image-original':
+        if (!_expectBlob(input.data, 'image-original')) return;
+        const imageOrigF = await imageDataToImageAttachmentFragmentViaDBlob(input.mimeType, input.data, source, title, caption, false, false);
+        if (imageOrigF)
+          newFragments.push(imageOrigF);
+        break;
+
+      // image converted (potentially unsupported mime)
+      case 'image-to-default':
+        if (!_expectBlob(input.data, 'image-to-default')) return;
+        const imageCastF = await imageDataToImageAttachmentFragmentViaDBlob(input.mimeType, input.data, source, title, caption, PLATFORM_IMAGE_MIMETYPE, false);
+        if (imageCastF)
+          newFragments.push(imageCastF);
+        break;
+
+      // image to text
+      case 'image-ocr':
+        if (!_expectBlob(input.data, 'Image OCR converter')) break;
+        try {
+          // Image -> OCR -> Inline text doc
+          const imageText = await ocrImageWithProgress(input.data, (progress) => edit(attachment.id, { outputsConversionProgress: progress }));
+          newFragments.push(createDocAttachmentFragment(title, caption, DVMimeType.TextPlain, createDMessageDataInlineText(imageText, 'text/plain'), refString, DOCPART_DEFAULT_VERSION, { ...docMeta, srcOcrFrom: 'image' }));
+          // warn if very little text was extracted (likely a photo/diagram rather than text)
+          if (imageText.trim().length < IMAGE_LOW_TEXT_THRESHOLD)
+            edit(attachment.id, { outputWarnings: ['Very little text extracted - this image may not contain readable text.'] });
+        } catch (error) {
+          console.error('[Image OCR Error]', error);
+        }
+        break;
+
+      // image to caption
+      case 'image-caption':
+        if (!_expectBlob(input.data, 'Image captioning converter')) break;
+        try {
+          const abortController = new AbortController();
+          const captionText = await imageCaptionFromImageOrThrow(
+            input.data,
+            input.mimeType,
+            attachment.id,
+            abortController.signal,
+            progress => edit(attachment.id, { outputsConversionProgress: progress / 100 }),
+          );
+          // if we're here we shall have valid text
+          newFragments.push(createDocAttachmentFragment(
+            title,
+            caption + ' (Caption)',
+            DVMimeType.TextPlain,
+            createDMessageDataInlineText(captionText || 'This image could not be described', 'text/plain'),
+            refString,
+            DOCPART_DEFAULT_VERSION,
+            { ...docMeta, srcOcrFrom: 'image-caption' },
+          ));
+        } catch (error: any) {
+          console.log('[DEV] Failed to caption image:', error);
+          const errorText = `[Captioning failed: ${error?.message || String(error)}]`;
+          edit(attachment.id, { outputWarnings: [errorText] });
+          newFragments.push(createDocAttachmentFragment(title, caption + ' (Error)', DVMimeType.TextPlain, createDMessageDataInlineText(errorText, 'text/plain'), refString, DOCPART_DEFAULT_VERSION, { ...docMeta, srcOcrFrom: 'image-caption' }));
+        }
+        break;
+
+
+      // pdf-auto: intelligent conversion with fallback chain (text → OCR → images)
+      case 'pdf-auto':
+        if (!_expectBlob(input.data, 'PDF auto converter')) break;
+        try {
+          // Phase 1: Try text extraction (0-20% progress)
+          const pdfArrayBuffer = await input.data.arrayBuffer();
+
+          // [pdf-text] Extract text with quality metadata
+          const pdfTextResult = await pdfToText(pdfArrayBuffer, (progress: number) => {
+            // Reserve 0-20% for text extraction attempt, 20-100% for potential image fallback
+            edit(attachment.id, { outputsConversionProgress: progress * 0.2 });
+          });
+
+          // Check text density to detect scanned/image-based PDFs
+          if (pdfTextResult.avgCharsPerPage >= PDF_LOW_TEXT_THRESHOLD) {
+            // Good text extraction - use it
+            newFragments.push(createDocAttachmentFragment(title, caption, DVMimeType.TextPlain, createDMessageDataInlineText(pdfTextResult.text, 'text/plain'), refString, DOCPART_DEFAULT_VERSION, { ...docMeta, srcOcrFrom: 'pdf' }));
+            edit(attachment.id, {
+              outputsHeuristic: { isAuto: true, actualConverterId: 'pdf-text', explain: `${pdfTextResult.avgCharsPerPage.toFixed(0)} chars/page` },
+            });
+          } else {
+            // Low text density - try OCR
+            // console.log(`[PDF Auto] Low text density (${pdfTextResult.avgCharsPerPage.toFixed(0)} chars/page), trying OCR...`);
+
+            // [pdf-images] Phase 2: Render pages to images (20-40% progress)
+            const pdfArrayBufferForImages = await input.data.arrayBuffer();
+            const imageDataURLs = await pdfToImageDataURLs(pdfArrayBufferForImages, PLATFORM_IMAGE_MIMETYPE, PDF_IMAGE_QUALITY, PDF_IMAGE_PAGE_SCALE, (progress) => {
+              edit(attachment.id, { outputsConversionProgress: 0.2 + progress * 0.2 });
+            });
+
+            // Limit pages for OCR (performance)
+            const pagesToProcess = Math.min(imageDataURLs.length, PDF_FALLBACK_MAX_IMAGES);
+            const imagesToOcr = imageDataURLs.slice(0, pagesToProcess);
+
+            // Phase 3: Try OCR on rendered pages (40-90% progress)
+            try {
+              // [pdf-images-ocr] OCR the images
+              const ocrResult = await ocrPdfPagesWithProgress(imagesToOcr, (progress) => {
+                edit(attachment.id, { outputsConversionProgress: 0.4 + progress * 0.5 });
+              });
+
+              if (ocrResult.avgCharsPerPage >= PDF_LOW_TEXT_THRESHOLD) {
+                // OCR yielded good text - use it
+                newFragments.push(createDocAttachmentFragment(title, caption, DVMimeType.TextPlain, createDMessageDataInlineText(ocrResult.text, 'text/plain'), refString, DOCPART_DEFAULT_VERSION, { ...docMeta, srcOcrFrom: 'pdf' }));
+                const truncNote = pdfTextResult.pageCount > pagesToProcess ? ` (${pagesToProcess}/${pdfTextResult.pageCount} pages)` : '';
+                edit(attachment.id, {
+                  outputsHeuristic: { isAuto: true, actualConverterId: 'pdf-images-ocr', explain: /*OCR extracted */`${ocrResult.avgCharsPerPage.toFixed(0)} chars/page${truncNote}` },
+                });
+              } else {
+                // OCR also yielded poor results - fall back to images
+                // console.log(`[PDF Auto] OCR also sparse (${ocrResult.avgCharsPerPage.toFixed(0)} chars/page), falling back to images`);
+                for (let i = 0; i < pagesToProcess; i++) {
+                  const pdfPageImage = imageDataURLs[i];
+                  const pdfPageImageF = await imageDataToImageAttachmentFragmentViaDBlob(pdfPageImage.mimeType, pdfPageImage.base64Data, source, `${title} (pg. ${i + 1})`, caption, false, false);
+                  if (pdfPageImageF)
+                    newFragments.push(pdfPageImageF);
+                }
+                const truncNote = pdfTextResult.pageCount > pagesToProcess ? ` (${pagesToProcess}/${pdfTextResult.pageCount} pages)` : '';
+                edit(attachment.id, {
+                  outputsHeuristic: { isAuto: true, actualConverterId: 'pdf-images', explain: `not a text page${truncNote}` },
+                });
+              }
+            } catch (ocrError) {
+              // OCR failed - fall back to images
+              console.warn('[PDF Auto] OCR failed, falling back to images:', ocrError);
+              for (let i = 0; i < pagesToProcess; i++) {
+                const pdfPageImage = imageDataURLs[i];
+                const pdfPageImageF = await imageDataToImageAttachmentFragmentViaDBlob(pdfPageImage.mimeType, pdfPageImage.base64Data, source, `${title} (pg. ${i + 1})`, caption, false, false);
+                if (pdfPageImageF)
+                  newFragments.push(pdfPageImageF);
+              }
+              edit(attachment.id, {
+                outputsHeuristic: { isAuto: true, actualConverterId: 'pdf-images', explain: 'OCR failed, attached as images' },
+              });
+            }
+          }
+        } catch (error) {
+          console.error('Error in PDF auto conversion:', error);
+        }
+        break;
+
+      // pdf-text: strict text extraction, no fallback (honors user choice)
+      case 'pdf-text':
+        if (!_expectBlob(input.data, 'PDF text converter')) break;
+        try {
+          const pdfTextResult = await pdfToText(await input.data.arrayBuffer(), progress => edit(attachment.id, { outputsConversionProgress: progress }));
+          // Always output text, even if sparse (user explicitly chose this)
+          newFragments.push(createDocAttachmentFragment(title, caption, DVMimeType.TextPlain, createDMessageDataInlineText(pdfTextResult.text, 'text/plain'), refString, DOCPART_DEFAULT_VERSION, { ...docMeta, srcOcrFrom: 'pdf' }));
+          edit(attachment.id, {
+            // warn if very little text was extracted (likely a scanned PDF)
+            outputWarnings: pdfTextResult.avgCharsPerPage >= 20 ? undefined : ['Very little text extracted - this PDF may be scanned. Try "Auto" or "OCR (for scans)" mode.'],
+            outputsHeuristic: { isAuto: false, actualConverterId: 'pdf-text', explain: `${pdfTextResult.avgCharsPerPage.toFixed(0)} chars/page` },
+          });
+        } catch (error) {
+          console.error('Error in PDF text extraction:', error);
+        }
+        break;
+
+      // pdf-images: render all pages as images (honors user choice)
+      case 'pdf-images':
+        if (!_expectBlob(input.data, 'PDF images converter')) break;
+        // Convert Blob to ArrayBuffer for PDF.js
+        try {
+          const imageDataURLs = await pdfToImageDataURLs(await input.data.arrayBuffer(), PLATFORM_IMAGE_MIMETYPE, PDF_IMAGE_QUALITY, PDF_IMAGE_PAGE_SCALE, (progress) => {
+            edit(attachment.id, { outputsConversionProgress: progress });
+          });
+          for (const pdfPageImage of imageDataURLs) {
+            const pdfPageImageF = await imageDataToImageAttachmentFragmentViaDBlob(pdfPageImage.mimeType, pdfPageImage.base64Data, source, `${title} (pg. ${newFragments.length + 1})`, caption, false, false);
+            if (pdfPageImageF)
+              newFragments.push(pdfPageImageF);
+          }
+          edit(attachment.id, {
+            outputsHeuristic: { isAuto: false, actualConverterId: 'pdf-images', explain: `${imageDataURLs.length} pages` },
+          });
+        } catch (error) {
+          console.error('Error converting PDF to images:', error);
+        }
+        break;
+
+      // pdf-images-ocr: force OCR on all pages (for scanned documents)
+      case 'pdf-images-ocr':
+        if (!_expectBlob(input.data, 'PDF OCR converter')) break;
+        try {
+          // Render pages to images (0-40% progress)
+          const imageDataURLs = await pdfToImageDataURLs(await input.data.arrayBuffer(), PLATFORM_IMAGE_MIMETYPE, PDF_IMAGE_QUALITY, PDF_IMAGE_PAGE_SCALE, (progress) => {
+            edit(attachment.id, { outputsConversionProgress: progress * 0.4 });
+          });
+
+          // OCR all pages (40-100% progress)
+          const ocrResult = await ocrPdfPagesWithProgress(imageDataURLs, (progress) => {
+            edit(attachment.id, { outputsConversionProgress: 0.4 + progress * 0.6 });
+          });
+
+          newFragments.push(createDocAttachmentFragment(title, caption, DVMimeType.TextPlain, createDMessageDataInlineText(ocrResult.text, 'text/plain'), refString, DOCPART_DEFAULT_VERSION, { ...docMeta, srcOcrFrom: 'pdf' }));
+          edit(attachment.id, {
+            // warn if very little text was extracted (likely a scanned PDF)
+            outputWarnings: ocrResult.avgCharsPerPage >= 20 ? undefined : ['Very little text extracted via OCR - this PDF may contain mostly images/diagrams.'],
+            outputsHeuristic: { isAuto: false, actualConverterId: 'pdf-images-ocr', explain: `${ocrResult.avgCharsPerPage.toFixed(0)} chars/page from ${ocrResult.pageCount} pages` },
+          });
+        } catch (error) {
+          console.error('Error in PDF OCR:', error);
+        }
+        break;
+
+      // pdf to text and images
+      case 'pdf-text-and-images':
+        if (!_expectBlob(input.data, 'PDF text and images converter')) break;
+        try {
+          // Convert Blob to ArrayBuffer for PDF.js - create separate ArrayBuffers to avoid mutation
+          // historical context: when we used ArrayBuffer, we had a "new Uint8Array(input.data.slice(0)).buffer" to avoid mutation
+          const pdfArrayBufferForImages = await input.data.arrayBuffer();
+          const pdfArrayBufferForText = await input.data.arrayBuffer();
+
+          // duplicated from 'pdf-images' (different progress update)
+          const imageFragments: DMessageAttachmentFragment[] = [];
+          const imageDataURLs = await pdfToImageDataURLs(pdfArrayBufferForImages, PLATFORM_IMAGE_MIMETYPE, PDF_IMAGE_QUALITY, PDF_IMAGE_PAGE_SCALE, (progress) => {
+            edit(attachment.id, { outputsConversionProgress: progress / 2 }); // Update progress (0% to 50%)
+          });
+          for (const pdfPageImage of imageDataURLs) {
+            const pdfPageImageF = await imageDataToImageAttachmentFragmentViaDBlob(pdfPageImage.mimeType, pdfPageImage.base64Data, source, `${title} (pg. ${newFragments.length + 1})`, caption, false, false);
+            if (pdfPageImageF)
+              imageFragments.push(pdfPageImageF);
+          }
+
+          // duplicated from 'pdf-text'
+          const pdfTextResult = await pdfToText(pdfArrayBufferForText, (progress: number) => {
+            edit(attachment.id, { outputsConversionProgress: 0.5 + progress / 2 }); // Update progress (50% to 100%)
+          });
+          if (pdfTextResult.text.trim().length >= 2) {
+            // Add text fragment if there's meaningful text
+            const textFragment = createDocAttachmentFragment(title, caption, DVMimeType.TextPlain, createDMessageDataInlineText(pdfTextResult.text, 'text/plain'), refString, DOCPART_DEFAULT_VERSION, { ...docMeta, srcOcrFrom: 'pdf' });
+            newFragments.push(textFragment);
+          }
+          // Note: if text is sparse, images are still attached (user explicitly chose text+images)
+
+          // Add the text fragment first, then the image fragments
+          newFragments.push(...imageFragments);
+          edit(attachment.id, {
+            outputsHeuristic: { isAuto: false, actualConverterId: 'pdf-text-and-images', explain: `${pdfTextResult.avgCharsPerPage.toFixed(0)} chars/page + ${imageFragments.length} images` },
+          });
+        } catch (error) {
+          console.error('Error converting PDF to text and images:', error);
+        }
+        break;
+
+
+      // docx to html
+      case 'docx-to-html':
+        if (!_expectBlob(input.data, 'DOCX converter')) break;
+        try {
+          const { convertDocxToHTML } = await import('./file-converters/DocxToMarkdown');
+          const { html } = await convertDocxToHTML(await input.data.arrayBuffer());
+          newFragments.push(createDocAttachmentFragment(title, caption, DVMimeType.VndAgiCode, createDMessageDataInlineText(html, 'text/html'), refString, DOCPART_DEFAULT_VERSION, docMeta));
+        } catch (error) {
+          console.error('Error in DOCX to Markdown conversion:', error);
+        }
+        break;
+
+
+      // url page text
+      case 'url-page-text':
+        if (!input.data || input.mimeType !== INT_MIME_VND_AGI_WEBPAGE || !(input.data as DraftWebInputData).pageText) {
+          console.log('Expected WebPageInputData for url-page-text, got:', input.data);
+          break;
+        }
+        const pageTextData = createDMessageDataInlineText((input.data as DraftWebInputData).pageText!, 'text/plain');
+        newFragments.push(createDocAttachmentFragment(title, caption, DVMimeType.TextPlain, pageTextData, refString, DOCPART_DEFAULT_VERSION, docMeta));
+        break;
+
+      // url page markdown
+      case 'url-page-markdown':
+        if (!input.data || input.mimeType !== INT_MIME_VND_AGI_WEBPAGE || !(input.data as DraftWebInputData).pageMarkdown) {
+          console.log('Expected WebPageInputData for url-page-markdown, got:', input.data);
+          break;
+        }
+        const pageMarkdownData = createDMessageDataInlineText((input.data as DraftWebInputData).pageMarkdown!, 'text/markdown');
+        newFragments.push(createDocAttachmentFragment(title, caption, DVMimeType.VndAgiCode, pageMarkdownData, refString, DOCPART_DEFAULT_VERSION, docMeta));
+        break;
+
+      // url page html
+      case 'url-page-html':
+        if (!input.data || input.mimeType !== INT_MIME_VND_AGI_WEBPAGE || !(input.data as DraftWebInputData).pageCleanedHtml) {
+          console.log('Expected WebPageInputData for url-page-html, got:', input.data);
+          break;
+        }
+        const pageHtmlData = createDMessageDataInlineText((input.data as DraftWebInputData).pageCleanedHtml!, 'text/html');
+        newFragments.push(createDocAttachmentFragment(title, caption, DVMimeType.VndAgiCode, pageHtmlData, refString, DOCPART_DEFAULT_VERSION, docMeta));
+        break;
+
+      // url page null
+      case 'url-page-null':
+        // user chose to not attach any version of the page
+        break;
+
+      // url page image
+      case 'url-page-image':
+        if (!input.urlImage) {
+          console.log('Expected URL image data for url-image, got:', input.urlImage);
+          break;
+        }
+        try {
+          // get the data
+          const { mimeType, imgDataUrl } = input.urlImage;
+          const { base64Data } = convert_Base64DataURL_To_Base64WithMimeType(imgDataUrl, 'attachment-url-page-image');
+          // do not convert, as we're in the optimal webp already
+          // do not resize, as the 512x512 is optimal for most LLM Vendors, an a great tradeoff of quality/size/cost
+          const screenshotImageF = await imageDataToImageAttachmentFragmentViaDBlob(mimeType, base64Data, source, `Screenshot of ${title}`, caption, false, false);
+          if (screenshotImageF)
+            newFragments.push(screenshotImageF);
+        } catch (error) {
+          console.error('Error attaching screenshot URL image:', error);
+        }
+        break;
+
+
+      // youtube transcript
+      case 'youtube-transcript':
+      case 'youtube-transcript-simple':
+        if (!input.data || input.mimeType !== INT_MIME_VND_AGI_YOUTUBE) {
+          console.log('Expected YouTubeInputData for youtube-transcript, got:', input.data);
+          break;
+        }
+        const youtubeData = input.data as DraftYouTubeInputData;
+        const transcriptText =
+          converter.id === 'youtube-transcript-simple' ? youtubeData.videoTranscript
+            : `**YouTube Title**: ${youtubeData.videoTitle}\n\n**YouTube Description**: ${youtubeData.videoDescription}\n\n**YouTube Transcript**:\n${youtubeData.videoTranscript}\n`;
+        const transcriptTextData = createDMessageDataInlineText(transcriptText, 'text/plain');
+        newFragments.push(createDocAttachmentFragment(title, caption, DVMimeType.TextPlain, transcriptTextData, refString, DOCPART_DEFAULT_VERSION, docMeta, undefined));
+        break;
+
+
+      // ego: message
+      case 'ego-fragments-inlined':
+        if (!input.data || input.mimeType !== INT_MIME_VND_AGI_EGO_FRAGMENTS || !(input.data as DraftEgoFragmentsInputData).fragments?.length) {
+          console.log('Expected non-empty EgoFragmentsInputData for ego-fragments-inlined, got:', input.data);
+          break;
+        }
+        const draftEgoData = input.data as DraftEgoFragmentsInputData;
+        for (const fragment of draftEgoData.fragments) {
+          if (isContentOrAttachmentFragment(fragment)) {
+            if (isDocPart(fragment.part)) {
+              console.log('Skipping doc part in ego-fragments-inlined:', fragment);
+              continue;
+            }
+            const fragmentTitle = `Chat Message: ${attachment.label}`;
+            const fragmentCaption = 'From chat: ' + draftEgoData.conversationTitle;
+            const fragmentRef = humanReadableHyphenated(refString + '-' + draftEgoData.messageId + '-' + fragment.fId);
+            newFragments.push(specialContentPartToDocAttachmentFragment(fragmentTitle, fragmentCaption, DVMimeType.TextPlain, fragment.part, fragmentRef, docMeta));
+          }
+        }
+        break;
+
+
+      case 'unhandled':
+        // force the user to explicitly select 'as text' if they want to proceed
+        break;
+
+
+      default:
+        const _exhaustiveCheck: never = converter.id;
+        console.warn('[DEV] Unhandled converter type:', _exhaustiveCheck);
+        break;
+    }
+  }
+
+  // warn if any doc output fragment has empty text content (something went wrong in conversion)
+  // TODO: future: check if the text is a conversion error... can happen with drag & drop
+  const emptyOutputWarnings: string[] = [];
+  for (const fragment of newFragments)
+    if (isDocPart(fragment.part) && fragment.part.data.idt === 'text' && !fragment.part.data.text.trim())
+      emptyOutputWarnings.push('Converted output is empty - the source content may be missing or invalid.');
+
+  // update
+  replaceOutputFragments(attachment.id, newFragments);
+  edit(attachment.id, {
+    outputsConverting: false,
+    outputsConversionProgress: null,
+    ...(emptyOutputWarnings.length && { outputWarnings: emptyOutputWarnings }),
+  });
+}
+
+
+/**
+ * Helper function to validate that input data is a Blob and log an error if not
+ */
+function _expectBlob(data: unknown, debugLocation: string): data is Blob {
+  if (!(data instanceof Blob)) {
+    console.warn(`[DEV] Expected Blob for ${debugLocation}, got:`, typeof data);
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Converts the input data of an AttachmentDraft to a string, or log as an error if not possible
+ */
+async function _inputDataToString(data: AttachmentDraftInput['data'], debugLocation: string): Promise<string> {
+  if (typeof data === 'string')
+    return data;
+  if (data instanceof Blob) {
+    // Convert Blob to text - this is expected for text files uploaded as blobs
+    try {
+      return await data.text();
+    } catch (error) {
+      console.warn('Failed to convert Blob to text:', error);
+      return '[Failed to read file content]';
+    }
+  }
+  console.warn(`[DEV] Expected string or Blob for input data at ${debugLocation}, got:`, typeof data);
+  return '';
+}
+
+/**
+ * Simple Client-side cleaning of possible HTML
+ */
+function _cleanPossibleHtmlText(inputStr: string): string {
+  return inputStr
+    // remove class and style attributes
+    .replace(/<[^>]+>/g, (tag) =>
+      tag.replace(/ class="[^"]*"/g, '').replace(/ style="[^"]*"/g, ''),
+    )
+    // remove svg elements
+    .replace(/<svg[^>]*>.*?<\/svg>/g, '');
+}
+
+
+/**
+ * Special function to convert a list of files to Attachment Fragments, without passing through the attachments system
+ *
+ * Uses the default conversion whenever multiple are available, as we don't have the chance to ask
+ * for user input here, whereas we do in the Attachments UI.
+ *
+ * Only returns the fragments that were successfully converted.
+ */
+export async function convertFilesToDAttachmentFragments(origin: AttachmentDraftSourceOriginFile, files: FileWithHandle[], options: AttachmentCreationOptions): Promise<DMessageAttachmentFragment[]> {
+  const validOutputFragmentsList: DMessageAttachmentFragment[][] = [];
+
+  for (const fileWithHandle of files) {
+
+    // This is the draft we'll edit and update
+    const _draft = attachmentCreate({
+      media: 'file', origin, fileWithHandle, refPath: fileWithHandle.name,
+    });
+
+    // Function to update the attachment draft
+    const updateDraft =
+      (changes: Partial<Omit<AttachmentDraft, 'outputFragments'>>) => Object.assign(_draft, changes);
+
+    try {
+      // 1. Load the input
+      await attachmentLoadInputAsync(_draft.source, updateDraft);
+      if (!_draft.input) {
+        console.warn('', `Failed to load input for file: ${fileWithHandle.name}`);
+        continue;
+      }
+
+      // 2. Define converters
+      attachmentDefineConverters(_draft.source, _draft.input, options, updateDraft);
+      if (!_draft.converters.length) {
+        console.warn(`No converters defined for file: ${fileWithHandle.name}`);
+        continue;
+      }
+
+      // 3. Select the already (pre-selected) active, or the first (non-disabled) Converter
+      if (_draft.converters.findIndex(_c => _c.isActive) === -1) {
+        let activateIndex = _draft.converters.findIndex(_c => !_c.disabled);
+        if (activateIndex === -1)
+          activateIndex = 0;
+        _draft.converters[activateIndex].isActive = true;
+      }
+
+      // 4. Perform conversion
+      await attachmentPerformConversion(_draft,
+        (_, update) => updateDraft(update),
+        (_, fragments) => _draft.outputFragments = fragments,
+      );
+      if (!_draft.outputFragments.length) {
+        console.warn(`[DEV] Failed to convert file: ${fileWithHandle.name}`, _draft);
+        continue;
+      }
+
+      validOutputFragmentsList.push(_draft.outputFragments);
+    } catch (error) {
+      console.warn(`Error processing file ${fileWithHandle.name}:`, error);
+      // allFragments.push([]);  // Add an empty array for failed conversions
+    }
+  }
+
+  // flatten the list of lists
+  return validOutputFragmentsList.flat();
+}

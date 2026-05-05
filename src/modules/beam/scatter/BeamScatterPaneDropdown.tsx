@@ -2,14 +2,14 @@ import * as React from 'react';
 
 import { Box, Button, DialogContent, DialogTitle, Dropdown, FormControl, FormLabel, IconButton, Input, ListDivider, ListItem, ListItemDecorator, Menu, MenuButton, MenuItem, Modal, ModalClose, ModalDialog, Typography } from '@mui/joy';
 import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
-import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import DriveFileRenameOutlineRoundedIcon from '@mui/icons-material/DriveFileRenameOutlineRounded';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import SchoolRoundedIcon from '@mui/icons-material/SchoolRounded';
 
-import { DEV_MODE_SETTINGS } from '../../../apps/settings-modal/UxLabsSettings';
 
-import type { DLLMId } from '~/modules/llms/store-llms';
+
+import type { DLLMId } from '~/common/stores/llms/llms.types';
 
 import type { BeamStoreApi } from '../store-beam.hooks';
 import { useModuleBeamStore } from '../store-module-beam';
@@ -68,6 +68,7 @@ export function BeamScatterDropdown(props: {
   // external state
   const {
     presets, addPreset, deletePreset,
+    cardAdd, toggleCardAdd,
     cardScrolling, toggleCardScrolling,
     scatterShowPrevMessages, toggleScatterShowPrevMessages,
     scatterShowLettering, toggleScatterShowLettering,
@@ -140,7 +141,7 @@ export function BeamScatterDropdown(props: {
               }}
               sx={{ ml: 'auto' }}
             >
-              <DeleteOutlineRoundedIcon />
+              <DeleteOutlineIcon />
             </IconButton>
           </MenuItem>,
         )}
@@ -156,6 +157,11 @@ export function BeamScatterDropdown(props: {
           History
         </MenuItem>
 
+        <MenuItem onClick={toggleCardAdd}>
+          <ListItemDecorator>{cardAdd && <CheckRoundedIcon />}</ListItemDecorator>
+          Add Button
+        </MenuItem>
+
         <MenuItem onClick={toggleCardScrolling}>
           <ListItemDecorator>{cardScrolling && <CheckRoundedIcon />}</ListItemDecorator>
           Resize Beams
@@ -166,7 +172,7 @@ export function BeamScatterDropdown(props: {
           Response Numbers
         </MenuItem>
 
-        <ListItem onClick={DEV_MODE_SETTINGS ? () => handleClearLastConfig() : undefined}>
+        <ListItem>
           <Typography level='body-sm'>Advanced</Typography>
         </ListItem>
 

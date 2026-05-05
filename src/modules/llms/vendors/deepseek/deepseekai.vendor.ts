@@ -1,49 +1,49 @@
-import { DeepseekIcon } from '~/common/components/icons/vendors/DeepseekIcon';
-
 import type { IModelVendor } from '../IModelVendor';
-import type { OpenAIAccessSchema } from '../../server/openai/openai.router';
+import type { OpenAIAccessSchema } from '../../server/openai/openai.access';
 
-import { LLMOptionsOpenAI, ModelVendorOpenAI } from '../openai/openai.vendor';
-import { OpenAILLMOptions } from '../openai/OpenAILLMOptions';
-
-import { DeepseekAISourceSetup } from './DeepseekAISourceSetup';
+import { ModelVendorOpenAI } from '../openai/openai.vendor';
 
 
-export interface SourceSetupDeepseek {
+export interface DDeepseekServiceSettings {
   deepseekKey: string;
+  deepseekHost: string;
+  csf?: boolean;
 }
 
-export const ModelVendorDeepseek: IModelVendor<SourceSetupDeepseek, OpenAIAccessSchema, LLMOptionsOpenAI> = {
+export const ModelVendorDeepseek: IModelVendor<DDeepseekServiceSettings, OpenAIAccessSchema> = {
   id: 'deepseek',
   name: 'Deepseek',
-  rank: 19,
+  displayRank: 16,
+  displayGroup: 'cloud',
   location: 'cloud',
   instanceLimit: 1,
-  hasBackendCapKey: 'hasLlmDeepseek',
+  hasServerConfigKey: 'hasLlmDeepseek',
 
-  // components
-  Icon: DeepseekIcon,
-  SourceSetupComponent: DeepseekAISourceSetup,
-  LLMOptionsComponent: OpenAILLMOptions,
+  /// client-side-fetch ///
+  csfAvailable: _csfDeepseekAvailable,
 
   // functions
   initializeSetup: () => ({
     deepseekKey: '',
+    deepseekHost: '',
   }),
   validateSetup: (setup) => {
     return setup.deepseekKey?.length >= 35;
   },
   getTransportAccess: (partialSetup) => ({
     dialect: 'deepseek',
+    clientSideFetch: _csfDeepseekAvailable(partialSetup) && !!partialSetup?.csf,
     oaiKey: partialSetup?.deepseekKey || '',
     oaiOrg: '',
-    oaiHost: '',
+    oaiHost: partialSetup?.deepseekHost || '',
     heliKey: '',
-    moderationCheck: false,
   }),
 
   // OpenAI transport ('Deepseek' dialect in 'access')
   rpcUpdateModelsOrThrow: ModelVendorOpenAI.rpcUpdateModelsOrThrow,
-  rpcChatGenerateOrThrow: ModelVendorOpenAI.rpcChatGenerateOrThrow,
-  streamingChatGenerateOrThrow: ModelVendorOpenAI.streamingChatGenerateOrThrow,
+
 };
+
+function _csfDeepseekAvailable(s?: Partial<DDeepseekServiceSettings>) {
+  return !!s?.deepseekKey;
+}

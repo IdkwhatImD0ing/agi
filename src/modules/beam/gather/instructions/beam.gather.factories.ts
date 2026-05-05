@@ -1,4 +1,4 @@
-import type { SvgIcon } from '@mui/material';
+import type { SvgIcon } from '@mui/joy';
 import BuildRoundedIcon from '@mui/icons-material/BuildRounded';
 import CheckBoxOutlinedIcon from '@mui/icons-material/CheckBoxOutlined';
 import MediationOutlinedIcon from '@mui/icons-material/MediationOutlined';
@@ -33,11 +33,11 @@ export const FUSION_FACTORIES: FusionFactorySpec[] = [
     shortLabel: 'Fuse',
     addLabel: 'Add Fusion',
     cardTitle: 'Combined Response',
-    Icon: MediationOutlinedIcon,
+    Icon: MediationOutlinedIcon as typeof SvgIcon,
     description: 'AI combines conversation details and ideas into one clear, comprehensive answer.',
     createInstructions: () => [
       {
-        type: 'chat-generate',
+        type: 'gather',
         label: 'Synthesizing Fusion',
         method: 's-s0-h0-u0-aN-u',
         systemPrompt: `
@@ -59,12 +59,12 @@ Synthesize the perfect cohesive response to my last message that merges the coll
     shortLabel: 'Guided',
     addLabel: 'Add Checklist',
     cardTitle: 'Guided Response',
-    Icon: CheckBoxOutlinedIcon,
+    Icon: CheckBoxOutlinedIcon as typeof SvgIcon,
     description: 'Choose between options extracted by AI from the replies, and the model will combine your selections into a single answer.',
     // description: 'This approach employs a two-stage, interactive process where an AI first generates a checklist of insights from a conversation for user selection, then synthesizes those selections into a tailored, comprehensive response, integrating user preferences with AI analysis and creativity.',
     createInstructions: () => [
       {
-        type: 'chat-generate',
+        type: 'gather',
         label: 'Generating Checklist',
         display: 'chat-message',
         method: 's-s0-h0-u0-aN-u',
@@ -98,7 +98,7 @@ The user did NOT select:
 `.trim(),
       },
       {
-        type: 'chat-generate',
+        type: 'gather',
         label: 'Checklist-guided Merge',
         method: 's-s0-h0-u0-aN-u',
         systemPrompt: `
@@ -121,11 +121,11 @@ The final output should reflect a deep understanding of the user's preferences a
     shortLabel: 'Compare',
     addLabel: 'Add Breakdown',
     cardTitle: 'Evaluation Table',
-    Icon: TableViewRoundedIcon,
-    description: 'Analyzes and compares AI responses, offering a structured framework to support your response choice.',
+    Icon: TableViewRoundedIcon as typeof SvgIcon,
+    description: 'Analyzes and compares replies, with a structured framework to support your choice.',
     createInstructions: () => [
       {
-        type: 'chat-generate',
+        type: 'gather',
         label: 'Evaluation',
         method: 's-s0-h0-u0-aN-u',
         systemPrompt: `
@@ -168,11 +168,11 @@ Only work with the provided {{N}} responses. Begin with listing the criteria.`.t
     shortLabel: 'Custom',
     addLabel: 'Add Custom',
     cardTitle: 'User Defined',
-    Icon: BuildRoundedIcon,
+    Icon: BuildRoundedIcon as typeof SvgIcon,
     description: 'Define your own fusion prompt.',
     createInstructions: () => [
       {
-        type: 'chat-generate',
+        type: 'gather',
         label: 'Executing Your Merge',
         method: 's-s0-h0-u0-aN-u',
         systemPrompt: `

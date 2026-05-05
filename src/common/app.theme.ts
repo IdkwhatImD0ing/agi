@@ -1,15 +1,18 @@
-import createCache from '@emotion/cache';
+import createCache, { StylisElement, StylisPlugin } from '@emotion/cache';
 
 import { Inter, JetBrains_Mono } from 'next/font/google';
 import { extendTheme } from '@mui/joy';
 
+import { animationEnterBelow } from '~/common/util/animUtils';
+
+
+// Definitions
+export type UIComplexityMode = 'minimal' | 'pro' | 'extra';
+export type ContentScaling = 'xs' | 'sm' | 'md';
+
 
 // CSS utils
 export const hideOnMobile = { display: { xs: 'none', md: 'flex' } };
-// export const hideOnDesktop = { display: { xs: 'flex', md: 'none' } };
-
-// Dimensions
-export const formLabelStartWidth = 140;
 
 
 // Theme & Fonts
@@ -20,6 +23,7 @@ const font = Inter({
   display: 'swap',
   fallback: ['Helvetica', 'Arial', 'sans-serif'],
 });
+export const themeFontFamilyCss = font.style.fontFamily;
 
 const jetBrainsMono = JetBrains_Mono({
   weight: ['400', '500', '600', '700'],
@@ -27,12 +31,14 @@ const jetBrainsMono = JetBrains_Mono({
   display: 'swap',
   fallback: ['monospace'],
 });
+export const themeCodeFontFamilyCss = jetBrainsMono.style.fontFamily;
 
-export const appTheme = extendTheme({
+
+export const createAppTheme = (uiComplexityMinimal: boolean) => extendTheme({
   fontFamily: {
-    body: font.style.fontFamily,
-    display: font.style.fontFamily,
-    code: jetBrainsMono.style.fontFamily,
+    body: themeFontFamilyCss,
+    display: themeFontFamilyCss,
+    code: themeCodeFontFamilyCss,
   },
   colorSchemes: {
     light: {
@@ -104,6 +110,20 @@ export const appTheme = extendTheme({
       },
     },
 
+    /**
+     * Badge
+     * - add a 'color-feature' color, to be used with the FeatureBadge component
+     */
+    JoyBadge: {
+      styleOverrides: {
+        badge: ({ ownerState }) =>
+          // HACK: we set this to 'color-feature' to force the theming to our liking
+          (ownerState.color as any) !== 'color-feature' ? undefined : ({
+            backgroundColor: '#0288D1',
+          }),
+      },
+    },
+
     // JoyMenuItem: {
     //   styleOverrides: {
     //     root: {
@@ -112,14 +132,19 @@ export const appTheme = extendTheme({
     //   },
     // },
 
-    // JoyModal: {
-    //   styleOverrides: {
-    //     backdrop: {
-    //       // backdropFilter: 'blur(2px)',
-    //       backdropFilter: 'none',
-    //     },
-    //   },
-    // },
+    JoyModal: {
+      styleOverrides: {
+        backdrop: !uiComplexityMinimal ? undefined : {
+          backdropFilter: 'none',
+          // backdropFilter: 'blur(2px)',
+        },
+        root: uiComplexityMinimal ? undefined : {
+          '& .agi-animate-enter': {
+            animation: `${animationEnterBelow} 0.16s ease-out`,
+          },
+        },
+      },
+    },
 
     /**
      * Switch: increase the size of the thumb, to a default iconButton
@@ -129,9 +154,10 @@ export const appTheme = extendTheme({
       styleOverrides: {
         root: ({ ownerState }) => ({
           ...(ownerState.size === 'md' && {
-            '--Switch-trackWidth': '36px',
-            '--Switch-trackHeight': '22px',
-            '--Switch-thumbSize': '17px',
+            // '--Switch-trackWidth': '36px',
+            // '--Switch-trackHeight': '22px',
+            // '--Switch-thumbSize': '17px',
+            '--Switch-thumbSize': '16px',
           }),
         }),
       },
@@ -149,14 +175,14 @@ export const lineHeightTextareaMd = 1.75;
 export const themeZIndexBeamView = 10;
 export const themeZIndexPageBar = 25;
 export const themeZIndexDesktopDrawer = 26;
-export const themeZIndexDesktopNav = 27;
+export const themeZIndexDesktopPanel = 27;
+export const themeZIndexDesktopNav = 30;
+export const themeZIndexChatBubble = 50;
+export const themeZIndexDragOverlay = 60;
 export const themeZIndexOverMobileDrawer = 1301;
 
-export const themeBreakpoints = appTheme.breakpoints.values;
 
-
-// Dyanmic UI Sizing
-export type ContentScaling = 'xs' | 'sm' | 'md';
+// Dynamic UI Sizing
 
 export function adjustContentScaling(scaling: ContentScaling, offset?: number) {
   if (!offset) return scaling;
@@ -175,9 +201,12 @@ interface ContentScalingOptions {
   blockLineHeight: string | number;
   // ChatMessage
   chatMessagePadding: number;
+  fragmentButtonFontSize: string;
   // ChatDrawer
   chatDrawerItemSx: { '--ListItem-minHeight': string, fontSize: string };
   chatDrawerItemFolderSx: { '--ListItem-minHeight': string, fontSize: string };
+  // OptimaPanelGroup
+  optimaPanelGroupSize: 'sm' | 'md';
 }
 
 export const themeScalingMap: Record<ContentScaling, ContentScalingOptions> = {
@@ -187,9 +216,11 @@ export const themeScalingMap: Record<ContentScaling, ContentScalingOptions> = {
     blockFontSize: 'xs',
     blockImageGap: 1,
     blockLineHeight: 1.666667,
-    chatMessagePadding: 1.25,
+    chatMessagePadding: 1,
+    fragmentButtonFontSize: 'xs',
     chatDrawerItemSx: { '--ListItem-minHeight': '2.25rem', fontSize: 'sm' },          // 36px
     chatDrawerItemFolderSx: { '--ListItem-minHeight': '2.5rem', fontSize: 'sm' },     // 40px
+    optimaPanelGroupSize: 'sm',
   },
   sm: {
     blockCodeFontSize: '0.75rem',
@@ -198,8 +229,10 @@ export const themeScalingMap: Record<ContentScaling, ContentScalingOptions> = {
     blockImageGap: 1.5,
     blockLineHeight: 1.714286,
     chatMessagePadding: 1.5,
+    fragmentButtonFontSize: 'sm',
     chatDrawerItemSx: { '--ListItem-minHeight': '2.25rem', fontSize: 'sm' },
     chatDrawerItemFolderSx: { '--ListItem-minHeight': '2.5rem', fontSize: 'sm' },
+    optimaPanelGroupSize: 'sm',
   },
   md: {
     blockCodeFontSize: '0.875rem',
@@ -208,8 +241,10 @@ export const themeScalingMap: Record<ContentScaling, ContentScalingOptions> = {
     blockImageGap: 2,
     blockLineHeight: 1.75,
     chatMessagePadding: 2,
+    fragmentButtonFontSize: 'sm',
     chatDrawerItemSx: { '--ListItem-minHeight': '2.5rem', fontSize: 'md' },           // 40px
     chatDrawerItemFolderSx: { '--ListItem-minHeight': '2.75rem', fontSize: 'md' },    // 44px
+    optimaPanelGroupSize: 'md',
   },
   // lg: {
   //   chatDrawerFoldersLineHeight: '3rem',
@@ -221,8 +256,37 @@ export const themeScalingMap: Record<ContentScaling, ContentScalingOptions> = {
 
 const isBrowser = typeof document !== 'undefined';
 
+const emotionStylisPlugins: StylisPlugin[] = [
+
+  /**
+   * 1. remove the default prefixer plugin: probably not needed and bloating
+   */
+  // prefixer,
+
+  /**
+   * 2. add a function to remove wide-matching CSS rules from Joy UI.
+   * Culprit: https://github.com/mui/material-ui/blob/a705e1f15075b2deb59263868bfa7b1d9f84cdd4/packages/mui-joy/src/Checkbox/Checkbox.tsx#L59
+   * These '~ *' rules are slow and cause a lot of reflows.
+   *
+   * To validate, search the Elements tab for JoyCheckbox-root, and see if there's the '~ *' rule.
+   */
+  function removeSlowCSS(element: StylisElement /*, index, children, callback*/) {
+    if (
+      element.type === 'rule' // only operate on rules
+      && element.value.endsWith('~*')  // where the selector is broad reaching
+      && Array.isArray(element.children)  // and there are children (rules)
+    ) {
+      // console.log('✓ Filtering out problematic selector:', element);
+      element.return = ' ';  // removes the selector (empirical)
+      element.children = []; // removes the rule (empirical)
+    }
+  },
+
+];
+
+
 export function createEmotionCache() {
-  let insertionPoint;
+  let insertionPoint: HTMLElement | undefined;
 
   if (isBrowser) {
     // On the client side, _document.tsx has a meta tag with the name "emotion-insertion-point" at the top of the <head>.
@@ -233,7 +297,7 @@ export function createEmotionCache() {
     insertionPoint = emotionInsertionPoint ?? undefined;
   }
 
-  return createCache({ key: 'mui-style', insertionPoint });
+  return createCache({ key: 'mui-style', insertionPoint: insertionPoint, stylisPlugins: emotionStylisPlugins });
 }
 
 // MISC

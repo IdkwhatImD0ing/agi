@@ -32,7 +32,6 @@ assignees: enricoros
   - [ ] verify deployment on Vercel
   - [ ] verify container on GitHub Packages
   - [ ] update the GitHub release
-  - [ ] push as stable `git push opensource main:main-stable`
 - Announce:
   - [ ] Discord announcement
   - [ ] Twitter announcement

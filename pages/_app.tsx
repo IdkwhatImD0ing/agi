@@ -1,33 +1,49 @@
 import * as React from 'react';
 import Head from 'next/head';
+import dynamic from 'next/dynamic';
 import { MyAppProps } from 'next/app';
-import { Analytics as VercelAnalytics } from '@vercel/analytics/next';
-import { SpeedInsights as VercelSpeedInsights } from '@vercel/speed-insights/next';
-import { useRouter } from 'next/navigation';
+import { useRouter } from 'next/router';
+import { ClerkLoaded, ClerkProvider, useUser } from '@clerk/nextjs';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 
 import { Brand } from '~/common/app.config';
 import { apiQuery } from '~/common/util/trpc.client';
+import { firestore } from '../src/firebase';
+
+
+// [server-client-safe] dynamic imports to avoid webpack bundling issues with next/navigation
+const VercelAnalytics = dynamic(() => import('@vercel/analytics/next').then(mod => mod.Analytics), { ssr: false });
+const VercelSpeedInsights = dynamic(() => import('@vercel/speed-insights/next').then(mod => mod.SpeedInsights), { ssr: false });
+
 
 import 'katex/dist/katex.min.css';
 import '~/common/styles/CodePrism.css';
 import '~/common/styles/GithubMarkdown.css';
 import '~/common/styles/NProgress.css';
+import '~/common/styles/agi.effects.css';
 import '~/common/styles/app.styles.css';
 
+import { ErrorBoundary } from '~/common/components/ErrorBoundary';
+import { hasGoogleAnalytics, OptionalGoogleAnalytics } from '~/common/components/3rdparty/GoogleAnalytics';
+import { hasPostHogAnalytics, OptionalPostHogAnalytics } from '~/common/components/3rdparty/PostHogAnalytics';
+import { OverlaysInsert } from '~/common/layout/overlays/OverlaysInsert';
+import { SnackbarInsert } from '~/common/components/snackbar/SnackbarInsert';
 import { ProviderBackendCapabilities } from '~/common/providers/ProviderBackendCapabilities';
 import { ProviderBootstrapLogic } from '~/common/providers/ProviderBootstrapLogic';
 import { ProviderSingleTab } from '~/common/providers/ProviderSingleTab';
-import { ProviderSnacks } from '~/common/providers/ProviderSnacks';
-import { ProviderTRPCQuerySettings } from '~/common/providers/ProviderTRPCQuerySettings';
 import { ProviderTheming } from '~/common/providers/ProviderTheming';
-import { hasGoogleAnalytics, OptionalGoogleAnalytics } from '~/common/components/GoogleAnalytics';
-import { isVercelFromFrontend } from '~/common/util/pwaUtils';
-import { ClerkLoaded, ClerkProvider, useUser } from '@clerk/nextjs';
-import { firestore } from 'src/firebase';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { Is } from '~/common/util/pwaUtils';
 
-const MyApp = ({ Component, emotionCache, pageProps }: MyAppProps) => (
-  <ClerkProvider>
+
+const Big_AGI_App = ({ Component, emotionCache, pageProps }: MyAppProps) => {
+
+  // We are using a nextjs per-page layout pattern to bring the (Optima) layout creation to a shared place
+  // This reduces the flicker and the time switching between apps, and seems to not have impact on
+  // the build. This is a good trade-off for now.
+  const getLayout = Component.getLayout ?? ((page: any) => page);
+
+  return <ClerkProvider>
+
     <Head>
       <title>{Brand.Title.Common}</title>
       <meta name="viewport" content="minimum-scale=1, initial-scale=1, width=device-width, shrink-to-fit=no" />
@@ -35,29 +51,29 @@ const MyApp = ({ Component, emotionCache, pageProps }: MyAppProps) => (
 
     <ProviderTheming emotionCache={emotionCache}>
       <ProviderSingleTab>
-        <ProviderTRPCQuerySettings>
-          <ProviderBackendCapabilities>
-            {/* ^ SSR boundary */}
+        <ProviderBackendCapabilities>
+          {/* ^ Backend capabilities & SSR boundary */}
+          <ErrorBoundary outer>
             <ProviderBootstrapLogic>
-              <ProviderSnacks>
-                <ClerkLoaded>
-                  <Redirect />
-                  <Component {...pageProps} />
-                </ClerkLoaded>
-              </ProviderSnacks>
+              <SnackbarInsert />
+              <ClerkLoaded>
+                <Redirect />
+                {getLayout(<Component {...pageProps} />)}
+              </ClerkLoaded>
+              <OverlaysInsert />
             </ProviderBootstrapLogic>
-          </ProviderBackendCapabilities>
-        </ProviderTRPCQuerySettings>
+          </ErrorBoundary>
+        </ProviderBackendCapabilities>
       </ProviderSingleTab>
     </ProviderTheming>
 
-    {isVercelFromFrontend && <VercelAnalytics debug={false} />}
-    {isVercelFromFrontend && <VercelSpeedInsights debug={false} sampleRate={1 / 2} />}
     {hasGoogleAnalytics && <OptionalGoogleAnalytics />}
-  </ClerkProvider>
-);
+    {hasPostHogAnalytics && <OptionalPostHogAnalytics />}
+    {Is.Deployment.VercelFromFrontend && <VercelAnalytics debug={false} />}
+    {Is.Deployment.VercelFromFrontend && <VercelSpeedInsights debug={false} sampleRate={1 / 2} />}
 
-const allowedURLS = ['/', '/sign-in', '/sign-up', '/privacy', '/terms'];
+  </ClerkProvider>;
+};
 
 const Redirect = () => {
   const { user } = useUser();
@@ -73,29 +89,27 @@ const Redirect = () => {
 
     try {
       const docSnap = await getDoc(userCollectionRef);
+
       if (!docSnap.exists()) {
-        // Collection does not exist, create it
         await setDoc(userCollectionRef, { authorized: false });
-        router.push('/');
-      } else {
-        // Collection exists, check if authorized
-        if (!docSnap.data().authorized) {
-          router.push('/');
-        }
+        await router.push('/');
+        return;
+      }
+
+      if (!docSnap.data().authorized) {
+        await router.push('/');
       }
     } catch (error) {
       console.error('Error checking user authorization:', error);
-      // Handle any errors, e.g., redirect or show a message
     }
-    console.log('User is authorized');
   }, [user, router]);
 
   React.useEffect(() => {
-    checkAndRedirect();
-  }, [user, router, checkAndRedirect]);
+    void checkAndRedirect();
+  }, [checkAndRedirect]);
 
   return null;
 };
 
-// enables the React Query API invocation
-export default apiQuery.withTRPC(MyApp);
+// Initializes React Query and tRPC, and enables the tRPC React Query hooks (apiQuery).
+export default apiQuery.withTRPC(Big_AGI_App);

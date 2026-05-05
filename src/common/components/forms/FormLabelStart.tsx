@@ -1,36 +1,53 @@
 import * as React from 'react';
 
+import type { SxProps } from '@mui/joy/styles/types';
 import { FormHelperText, FormLabel } from '@mui/joy';
-import { SxProps } from '@mui/joy/styles/types';
 import InfoIcon from '@mui/icons-material/Info';
 
 import { GoodTooltip } from '~/common/components/GoodTooltip';
-import { formLabelStartWidth } from '~/common/app.theme';
+import WarningRoundedIcon from '@mui/icons-material/WarningRounded';
+
+
+const _styles = {
+  label: {
+    flexWrap: 'nowrap',
+    whiteSpace: 'nowrap',
+  } as const,
+  labelClickable: {
+    flexWrap: 'nowrap',
+    whiteSpace: 'nowrap',
+    cursor: 'pointer',
+    textDecoration: 'underline',
+  } as const,
+} as const;
 
 
 /**
  * Shared label part (left side)
  */
-const FormLabelStartBase = (props: {
-  title: string | React.JSX.Element,
-  description?: string | React.JSX.Element
-  tooltip?: string | React.JSX.Element,
+export const FormLabelStart = React.memo(function FormLabelStartBase(props: {
+  title: React.ReactNode,
+  description?: React.ReactNode,
+  tooltip?: React.ReactNode,
+  tooltipWarning?: boolean,
   onClick?: (event: React.MouseEvent) => void,
   sx?: SxProps,
-}) =>
-  <div>
+}) {
+  return <div>
     {/* Title */}
     <FormLabel
       onClick={props.onClick}
-      sx={{
-        minWidth: formLabelStartWidth,
-        ...(!!props.onClick && { cursor: 'pointer', textDecoration: 'underline' }),
-        ...props.sx,
-      }}
+      sx={props.onClick ? _styles.labelClickable
+        : props.sx ? { ..._styles.label, ...props.sx }
+          : _styles.label
+      }
     >
-      {props.title} {props.tooltip && (
-      <GoodTooltip title={props.tooltip}>
-        <InfoIcon sx={{ ml: 0.5, cursor: 'pointer', fontSize: 'md', color: 'primary.solidBg' }} />
+      {props.title} {!!props.tooltip && (
+      <GoodTooltip title={props.tooltip} arrow placement='top'>
+        {props.tooltipWarning
+          ? <WarningRoundedIcon sx={{ ml: 0.5, cursor: 'pointer', fontSize: 'md', color: 'red' }} />
+          : <InfoIcon sx={{ ml: 0.5, cursor: 'pointer', fontSize: 'md', color: 'primary.solidBg' }} />
+        }
       </GoodTooltip>
     )}
     </FormLabel>
@@ -47,6 +64,4 @@ const FormLabelStartBase = (props: {
       </FormHelperText>
     )}
   </div>;
-FormLabelStartBase.displayName = 'FormLabelStart';
-
-export const FormLabelStart = React.memo(FormLabelStartBase);
+});

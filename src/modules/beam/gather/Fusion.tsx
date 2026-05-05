@@ -6,13 +6,16 @@ import TelegramIcon from '@mui/icons-material/Telegram';
 
 import { ChatMessageMemo } from '../../../apps/chat/components/message/ChatMessage';
 
-import { findLLMOrThrow } from '~/modules/llms/store-llms';
-import { findVendorById } from '~/modules/llms/vendors/vendors.registry';
+import { DLLMId, getLLMLabel } from '~/common/stores/llms/llms.types';
+import type { DMessageFragment, DMessageFragmentId } from '~/common/stores/chat/chat.fragments';
+import type { DMessageId } from '~/common/stores/chat/chat.message';
+import { messageFragmentsReduceText } from '~/common/stores/chat/chat.message';
 
 import { GoodTooltip } from '~/common/components/GoodTooltip';
 import { InlineError } from '~/common/components/InlineError';
 import { animationEnterBelow } from '~/common/util/animUtils';
-import { copyToClipboard } from '~/common/util/clipboardUtils';
+import { clipboardInterceptCtrlCForCleanup, copyToClipboard } from '~/common/util/clipboardUtils';
+import { useLLMSelect } from '~/common/components/forms/useLLMSelect';
 
 import { BeamCard, beamCardClasses, beamCardMessageScrollingSx, beamCardMessageSx, beamCardMessageWrapperSx } from '../BeamCard';
 import { BeamStoreApi, useBeamStore } from '../store-beam.hooks';
@@ -22,12 +25,17 @@ import { GATHER_COLOR } from '../beam.config';
 import { findFusionFactory } from './instructions/beam.gather.factories';
 import { fusionIsEditable, fusionIsError, fusionIsFusing, fusionIsIdle, fusionIsStopped, fusionIsUsableOutput } from './beam.gather';
 import { useBeamCardScrolling } from '../store-module-beam';
+import { useMessageAvatarLabel } from '~/common/util/dMessageUtils';
 
 
 export function Fusion(props: {
   beamStore: BeamStoreApi,
   fusionId: string,
+  isMobile: boolean,
 }) {
+
+  // state
+  const [showLlmSelector, setShowLlmSelector] = React.useState(false);
 
   // external state
   const fusion = useBeamStore(props.beamStore, store => store.fusions.find(fusion => fusion.fusionId === props.fusionId) ?? null);
@@ -41,45 +49,54 @@ export function Fusion(props: {
   const isStopped = fusionIsStopped(fusion);
   const isUsable = fusionIsUsableOutput(fusion);
   const showUseButtons = isUsable && !isFusing;
+  const { tooltip: fusionAvatarTooltip } = useMessageAvatarLabel(fusion?.outputDMessage, 'pro');
 
   const factory = findFusionFactory(fusion?.factoryId);
 
-  const { removeFusion, toggleFusionGathering } = props.beamStore.getState();
-
+  const { removeFusion, toggleFusionGathering, fusionSetLlmId } = props.beamStore.getState();
 
   // get LLM Label and Vendor Icon
   const llmId = fusion?.llmId ?? null;
-  const { llmLabel, llmVendorIcon } = React.useMemo(() => {
-    if (llmId) {
-      try {
-        const llm = findLLMOrThrow(llmId);
-        return {
-          llmLabel: llm.label,
-          llmVendorIcon: findVendorById(llm._source?.vId)?.Icon,
-        };
-      } catch (e) {
-      }
-    }
-    return { llmLabel: 'Model unknown', llmVendorIcon: undefined };
-  }, [llmId]);
+  const setLlmId = React.useCallback((llmId: DLLMId | null) => fusionSetLlmId(props.fusionId, llmId), [props.fusionId, fusionSetLlmId]);
+  const [llmOrNull, llmComponent] = useLLMSelect(llmId, setLlmId, {
+    label: '',
+    disabled: isFusing,
+    showStarFilter: true,
+  });
 
+  // hide selector when fusion starts
+  React.useEffect(() => {
+    isFusing && setShowLlmSelector(false);
+  }, [isFusing]);
+
+  // more derived
+  const llmLabel = llmOrNull ? getLLMLabel(llmOrNull) : 'Model unknown';
 
   // handlers
-  const handleFusionCopy = React.useCallback(() => {
+  const handleFusionCopyToClipboard = React.useCallback(() => {
     const { fusions } = props.beamStore.getState();
     const fusion = fusions.find(fusion => fusion.fusionId === props.fusionId);
-    if (fusion?.outputDMessage?.text)
-      copyToClipboard(fusion.outputDMessage.text, 'Merge');
+    if (fusion?.outputDMessage?.fragments.length)
+      copyToClipboard(messageFragmentsReduceText(fusion.outputDMessage.fragments), 'Merge');
   }, [props.beamStore, props.fusionId]);
 
   const handleFusionUse = React.useCallback(() => {
     // get snapshot values, so we don't have to react to the hook
     const { fusions, onSuccessCallback } = props.beamStore.getState();
     const fusion = fusions.find(fusion => fusion.fusionId === props.fusionId);
-    if (fusion?.outputDMessage?.text && onSuccessCallback)
-      onSuccessCallback(fusion.outputDMessage.text, fusion.llmId || '');
+    if (fusion?.outputDMessage?.fragments.length && onSuccessCallback)
+      onSuccessCallback(fusion.outputDMessage);
   }, [props.beamStore, props.fusionId]);
 
+  const handleIconClick = React.useCallback((event: React.MouseEvent) => {
+    if (event.shiftKey) {
+      const fusion = props.beamStore.getState().fusions.find(fusion => fusion.fusionId === props.fusionId);
+      console.log({ fusion });
+      return;
+    }
+    // Toggle LLM selector
+    setShowLlmSelector(!showLlmSelector);
+  }, [showLlmSelector, props.beamStore, props.fusionId]);
 
   const handleFusionRemove = React.useCallback(() => {
     removeFusion(props.fusionId);
@@ -89,12 +106,28 @@ export function Fusion(props: {
     toggleFusionGathering(props.fusionId);
   }, [props.fusionId, toggleFusionGathering]);
 
+  const handleFragmentDelete = React.useCallback((messageId: DMessageId, fragmentId: DMessageFragmentId) => {
+    const { fusions, fusionDeleteFragment } = props.beamStore.getState();
+    const fusion = fusions.find(f => f.outputDMessage?.id === messageId);
+    if (fusion)
+      fusionDeleteFragment(fusion.fusionId, fragmentId);
+  }, [props.beamStore]);
+
+  const handleFragmentReplace = React.useCallback((messageId: DMessageId, fragmentId: DMessageFragmentId, newFragment: DMessageFragment) => {
+    const { fusions, fusionReplaceFragment } = props.beamStore.getState();
+    const fusion = fusions.find(f => f.outputDMessage?.id === messageId);
+    if (fusion)
+      fusionReplaceFragment(fusion.fusionId, fragmentId, newFragment);
+  }, [props.beamStore]);
+
   // escape hatch: no factory, no fusion - nothing to do
   if (!fusion || !factory)
     return;
 
   return (
     <BeamCard
+      role='beam-card'
+      tabIndex={-1}
       className={
         // (isIdle ? beamCardClasses.fusionIdle : '')
         (isError ? beamCardClasses.errored + ' ' : '')
@@ -110,9 +143,13 @@ export function Fusion(props: {
         factory={factory}
         isFusing={isFusing}
         isInterrupted={isStopped}
+        isMobile={props.isMobile}
         isUsable={isUsable}
+        llmComponent={(isFusing || (!isEditable && !showLlmSelector)) ? undefined : llmComponent}
         llmLabel={llmLabel}
-        llmVendorIcon={llmVendorIcon}
+        llmVendorId={llmOrNull?.vId}
+        fusionAvatarTooltip={fusionAvatarTooltip}
+        onIconClick={isFusing ? undefined : handleIconClick}
         onRemove={handleFusionRemove}
         onToggleGenerate={handleToggleFusionGather}
       />
@@ -137,15 +174,18 @@ export function Fusion(props: {
       {!!fusion?.fusingInstructionComponent && fusion.fusingInstructionComponent}
 
       {/* Output Message */}
-      {(!!fusion?.outputDMessage?.text || fusion?.stage === 'fusing') && (
-        <Box sx={beamCardMessageWrapperSx}>
+      {(!!fusion?.outputDMessage?.fragments.length || fusion?.stage === 'fusing') && (
+        <Box onCopy={clipboardInterceptCtrlCForCleanup} sx={beamCardMessageWrapperSx}>
           {!!fusion.outputDMessage && (
             <ChatMessageMemo
               message={fusion.outputDMessage}
               fitScreen={true}
-              showAvatar={false}
-              showUnsafeHtml={true}
+              isMobile={props.isMobile}
+              hideAvatar
+              showUnsafeHtmlCode={true}
               adjustContentScaling={-1}
+              onMessageFragmentDelete={handleFragmentDelete}
+              onMessageFragmentReplace={handleFragmentReplace}
               sx={!cardScrolling ? beamCardMessageSx : beamCardMessageScrollingSx}
             />
           )}
@@ -160,7 +200,7 @@ export function Fusion(props: {
           {/* Copy */}
           <GoodTooltip title='Copy'>
             <IconButton
-              onClick={handleFusionCopy}
+              onClick={handleFusionCopyToClipboard}
             >
               <ContentCopyIcon sx={{ fontSize: 'md' }} />
             </IconButton>

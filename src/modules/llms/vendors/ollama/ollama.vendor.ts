@@ -1,75 +1,45 @@
-import { OllamaIcon } from '~/common/components/icons/vendors/OllamaIcon';
 import { apiAsync } from '~/common/util/trpc.client';
 
 import type { IModelVendor } from '../IModelVendor';
-import type { OllamaAccessSchema } from '../../server/ollama/ollama.router';
-import type { VChatContextRef, VChatGenerateContextName, VChatMessageOut } from '../../llm.client';
-import { unifiedStreamingClient } from '../unifiedStreamingClient';
-
-import { FALLBACK_LLM_RESPONSE_TOKENS, FALLBACK_LLM_TEMPERATURE, LLMOptionsOpenAI } from '../openai/openai.vendor';
-import { OpenAILLMOptions } from '../openai/OpenAILLMOptions';
-
-import { OllamaSourceSetup } from './OllamaSourceSetup';
+import type { OllamaAccessSchema } from '../../server/ollama/ollama.access';
 
 
-export interface SourceSetupOllama {
+interface DOllamaServiceSettings {
   ollamaHost: string;
-  ollamaJson: boolean;
+  csf?: boolean;
 }
 
 
-export const ModelVendorOllama: IModelVendor<SourceSetupOllama, OllamaAccessSchema, LLMOptionsOpenAI> = {
+export const ModelVendorOllama: IModelVendor<DOllamaServiceSettings, OllamaAccessSchema> = {
   id: 'ollama',
   name: 'Ollama',
-  rank: 22,
+  displayRank: 54,
+  displayGroup: 'local',
   location: 'local',
   instanceLimit: 2,
-  hasBackendCapKey: 'hasLlmOllama',
+  hasServerConfigKey: 'hasLlmOllama',
 
-  // components
-  Icon: OllamaIcon,
-  SourceSetupComponent: OllamaSourceSetup,
-  LLMOptionsComponent: OpenAILLMOptions,
+  /// client-side-fetch ///
+  csfAvailable: _csfOllamaAvailable,
 
   // functions
+  initializeSetup: () => ({
+    ollamaHost: '',
+    // csf: true, // eventually
+  }),
   getTransportAccess: (partialSetup): OllamaAccessSchema => ({
     dialect: 'ollama',
+    clientSideFetch: _csfOllamaAvailable(partialSetup) && !!partialSetup?.csf,
     ollamaHost: partialSetup?.ollamaHost || '',
-    ollamaJson: partialSetup?.ollamaJson || false,
   }),
 
   // List Models
   rpcUpdateModelsOrThrow: async (access) => await apiAsync.llmOllama.listModels.query({ access }),
 
-  // Chat Generate (non-streaming) with Functions
-  rpcChatGenerateOrThrow: async (access, llmOptions, messages, contextName: VChatGenerateContextName, contextRef: VChatContextRef | null, functions, forceFunctionName, maxTokens) => {
-    if (functions?.length || forceFunctionName)
-      throw new Error('Ollama does not support functions');
-
-    const { llmRef, llmTemperature, llmResponseTokens } = llmOptions;
-    try {
-      return await apiAsync.llmOllama.chatGenerate.mutate({
-        access,
-        model: {
-          id: llmRef,
-          temperature: llmTemperature ?? FALLBACK_LLM_TEMPERATURE,
-          maxTokens: maxTokens || llmResponseTokens || FALLBACK_LLM_RESPONSE_TOKENS,
-        },
-        history: messages,
-        context: contextRef ? {
-          method: 'chat-generate',
-          name: contextName,
-          ref: contextRef,
-        } : undefined,
-      }) as VChatMessageOut;
-    } catch (error: any) {
-      const errorMessage = error?.message || error?.toString() || 'Ollama Chat Generate Error';
-      console.error(`ollama.rpcChatGenerateOrThrow: ${errorMessage}`);
-      throw new Error(errorMessage);
-    }
-  },
-
-  // Chat Generate (streaming) with Functions
-  streamingChatGenerateOrThrow: unifiedStreamingClient,
-
 };
+
+function _csfOllamaAvailable(_s?: Partial<DOllamaServiceSettings>) {
+  // always available for local vendors - CSF falls back to DEFAULT_OLLAMA_HOST (http://127.0.0.1:11434)
+  // was: return !!s?.ollamaHost;
+  return true;
+}

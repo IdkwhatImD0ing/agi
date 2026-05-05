@@ -1,5 +1,11 @@
+import * as z from 'zod/v4';
+
+import { objectDeepCloneWithStringLimit } from '~/common/util/objectUtils';
+
+
 /// set this to true to see the tRPC and fetch requests made by the server
 export const SERVER_DEBUG_WIRE = false;
+const SERVER_DEBUG_MAX_BYTES = 8192;
 
 
 export class ServerFetchError extends Error {
@@ -16,8 +22,14 @@ export class ServerFetchError extends Error {
 /**
  * Fetches a URL, but throws an Error if the response is not ok.
  */
-export async function nonTrpcServerFetchOrThrow(url: string, method: 'GET' | 'POST', headers: HeadersInit, body: object | undefined): Promise<Response> {
-  const response = await fetch(url, { method, headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+export async function nonTrpcServerFetchOrThrow(url: string, method: 'GET' | 'POST', headers: HeadersInit, body: object | undefined, signal?: AbortSignal): Promise<Response> {
+  // create the upstream request object
+  const response = await fetch(url, {
+    method,
+    headers,
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    ...(signal !== undefined ? { signal } : {}),
+  });
 
   // Throws an error if the response is not ok
   // Use in server-side code, and not tRPC code (which has utility functions in trpc.serverutils.ts)
@@ -44,15 +56,37 @@ export function safeErrorString(error: any): string | null {
   if (!error)
     return null;
 
+  // handle AggregateError
+  if ((error instanceof AggregateError || error?.name === 'AggregateError') && Array.isArray(error.errors)) {
+    const errors = error.errors?.map((e: any) => safeErrorString(e)).filter(Boolean);
+    return `AggregateError: ${errors.join('; ')}`;
+  }
+
+  // handle zod v4 errors
+  if (error instanceof z.ZodError)
+    return z.prettifyError(error);
+
   // descend into an 'error' object
   if (error.error)
     return safeErrorString(error.error);
 
   // choose the 'message' property if available
-  if (error.message)
+  if (error.message) {
+    if (error.message === 'AggregateError' && error.stack)
+      return `AggregateError: ${safeErrorString(error.stack)}`;
     return safeErrorString(error.message);
+  }
   if (typeof error === 'string')
     return error;
+
+  // for real 'Error' objects, use the normal toString, as the JSON stringify may ignore fields for some reason
+  try {
+    if (error instanceof Error && 'toString' in error && typeof error.toString === 'function')
+      return error.toString();
+  } catch (e) {
+    // ignore
+  }
+
   if (typeof error === 'object') {
     try {
       return JSON.stringify(error, null, 2).slice(1, -1);
@@ -73,16 +107,26 @@ export function serverCapitalizeFirstLetter(string: string) {
 /**
  * Weak (meaning the string could be encoded poorly) function that returns a string that can be used to debug a request
  */
-export function debugGenerateCurlCommand(method: 'GET' | 'POST' | 'DELETE', url: string, headers: HeadersInit, body: object | undefined): string {
+export function debugGenerateCurlCommand(method: 'GET' | 'POST' | 'DELETE' | 'PUT', url: string, headers?: HeadersInit, body?: object): string {
   let curl = `curl -X ${method} '${url}' `;
 
-  const headersRecord = headers as Record<string, string>;
+  const headersRecord = (headers || {}) as Record<string, string>;
 
   for (const header in headersRecord)
     curl += `-H '${header}: ${headersRecord[header]}' `;
 
-  if (method === 'POST' && body)
-    curl += `-d '${JSON.stringify(body)}'`;
+  if (method === 'POST' && body) {
+    if (body instanceof FormData) {
+      for (const [key, value] of body.entries()) {
+        if (value instanceof File) {
+          curl += `-F '${key}=@${value.name}' `;
+        } else {
+          curl += `-F '${key}=${value}' `;
+        }
+      }
+    } else
+      curl += `-d '${JSON.stringify(objectDeepCloneWithStringLimit(body, 'debug-curl-body', 4096))}'`;
+  }
 
   return curl;
 }
@@ -90,5 +134,93 @@ export function debugGenerateCurlCommand(method: 'GET' | 'POST' | 'DELETE', url:
 export function createEmptyReadableStream<T = Uint8Array>(): ReadableStream<T> {
   return new ReadableStream({
     start: (controller) => controller.close(),
+  });
+}
+
+
+/**
+ * Used in retry logic to wait between attempts while respecting abort signals.
+ * @returns True if aborted, false if completed normally
+ */
+export function abortableDelay(delayMs: number, abortSignal: AbortSignal): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    // pre-check: already aborted or invalid delay
+    if (abortSignal.aborted || delayMs <= 0) {
+      resolve(abortSignal.aborted);
+      return;
+    }
+
+    const timer = setTimeout(() => resolve(false), delayMs);
+
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+
+    abortSignal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+
+/**
+ * Debugging utility for logging network I/O with sequence tracking and timing.
+ * Used for both server-side and client-side (via CSF) wire debugging.
+ *
+ * Usage:
+ *  - Server: const wire = createDebugWireLogger('AIX', SERVER_DEBUG_WIRE);
+ *  - Client: const wire = null; // explicitly disabled
+ *  - Access: wire?.logRequest(...); wire?.logResponse(...);
+ */
+export class DebugWireLogger {
+  private sequenceNumber: number = 0;
+  private lastMs: number | null = null;
+  private readonly distinct: string = Date.now().toString(36).slice(-4);
+
+  constructor(private readonly label: string) {}
+
+  logRequest(method: 'GET' | 'POST' | 'DELETE' | 'PUT', url: string, headers?: HeadersInit, body?: object) {
+    console.log(`\n[${this.label}:${this.distinct}] ->`, debugGenerateCurlCommand(method, url, headers, body));
+  }
+
+  logResponse(data: any) {
+    this.sequenceNumber++;
+    const nowMs = Date.now();
+    const elapsedMs = this.lastMs ? nowMs - this.lastMs : 0;
+    this.lastMs = nowMs;
+
+    // deep clone the object with a per-string-field limit, and remove the type: 'event' field if present
+    const obectClone = objectDeepCloneWithStringLimit(data, `${this.label}.wire-debug`, SERVER_DEBUG_MAX_BYTES);
+    if (obectClone && typeof obectClone === 'object' && 'type' in obectClone && obectClone.type === 'event')
+      delete (obectClone as any).type;
+
+    console.log(
+      `\n[${this.label}:${this.distinct}] <- #${this.sequenceNumber} (${elapsedMs} ms):`,
+      obectClone,
+      // JSON.stringify(objectDeepCloneWithStringLimit(data, `${this.label}.wire-debug`, 8192), null, 2),
+    );
+  }
+
+}
+
+export const createDebugWireLogger = (label: string) => SERVER_DEBUG_WIRE ? new DebugWireLogger(label) : null;
+
+
+/** Utility to escape XML, for example to avoid XSS attacks. */
+export function escapeXml(unsafe: string): string {
+  return unsafe.replace(/[&<>"']/g, (match) => {
+    switch (match) {
+      case '&':
+        return '&amp;';
+      case '<':
+        return '&lt;';
+      case '>':
+        return '&gt;';
+      case '"':
+        return '&quot;';
+      case '\'':
+        return '&#39;';
+      default:
+        return match;
+    }
   });
 }

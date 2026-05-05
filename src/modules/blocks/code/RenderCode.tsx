@@ -1,319 +1,426 @@
 import * as React from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useShallow } from 'zustand/react/shallow';
 
 import type { SxProps } from '@mui/joy/styles/types';
-import { Box, ButtonGroup, IconButton, Sheet, styled, Tooltip, Typography } from '@mui/joy';
+import { Box, ButtonGroup, Sheet, Typography } from '@mui/joy';
+import ChangeHistoryTwoToneIcon from '@mui/icons-material/ChangeHistoryTwoTone';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import FitScreenIcon from '@mui/icons-material/FitScreen';
 import HtmlIcon from '@mui/icons-material/Html';
-import SchemaIcon from '@mui/icons-material/Schema';
-import ShapeLineOutlinedIcon from '@mui/icons-material/ShapeLineOutlined';
+import NumbersRoundedIcon from '@mui/icons-material/NumbersRounded';
+import ReplayRoundedIcon from '@mui/icons-material/ReplayRounded';
+import SquareTwoToneIcon from '@mui/icons-material/SquareTwoTone';
 import WrapTextIcon from '@mui/icons-material/WrapText';
+import ZoomOutMapIcon from '@mui/icons-material/ZoomOutMap';
 
 import { copyToClipboard } from '~/common/util/clipboardUtils';
-import { frontendSideFetch } from '~/common/util/clientFetchers';
-import { useUIPreferencesStore } from '~/common/state/store-ui';
+import { useFullscreenElement } from '~/common/components/useFullscreenElement';
+import { useUIPreferencesStore } from '~/common/stores/store-ui';
 
-import type { CodeBlock } from '../blocks';
-import { ButtonCodePen, isCodePenSupported } from './ButtonCodePen';
-import { ButtonJsFiddle, isJSFiddleSupported } from './ButtonJSFiddle';
-import { ButtonStackBlitz, isStackBlitzSupported } from './ButtonStackBlitz';
-import { heuristicIsHtml, IFrameComponent } from '../RenderHtml';
-import { patchSvgString, RenderCodeMermaid } from './RenderCodeMermaid';
+import { OVERLAY_BUTTON_RADIUS, OverlayButton, overlayButtonsActiveSx, overlayButtonsClassName, overlayButtonsTopRightSx, overlayGroupWithShadowSx } from '../OverlayButton';
+import { RenderCodeHtmlIFrame } from './code-renderers/RenderCodeHtmlIFrame';
+import { RenderCodeMermaid } from './code-renderers/RenderCodeMermaid';
+import { heuristicIsSVGCode, RenderCodeSVG } from './code-renderers/RenderCodeSVG';
+import { RenderCodeSyntax } from './code-renderers/RenderCodeSyntax';
+import { heuristicIsBlockPureHTML } from '../danger-html/RenderDangerousHtml';
+import { heuristicIsCodePlantUML, RenderCodePlantUML, usePlantUmlSvg } from './code-renderers/RenderCodePlantUML';
+import { useStickyCodeOverlay } from './useStickyCodeOverlay';
 
-
-export function getPlantUmlServerUrl(): string {
-  // set at nextjs build time
-  return process.env.NEXT_PUBLIC_PLANTUML_SERVER_URL || 'https://www.plantuml.com/plantuml/svg/';
-}
-
-
-async function fetchPlantUmlSvg(plantUmlCode: string): Promise<string | null> {
-  // Get the PlantUML server from inline env var
-  let plantUmlServerUrl = getPlantUmlServerUrl();
-  if (!plantUmlServerUrl.endsWith('/'))
-    plantUmlServerUrl += '/';
-
-  // fetch the PlantUML SVG
-  let text: string = '';
-  try {
-    // Dynamically import the PlantUML encoder - it's a large library that slows down app loading
-    const { encode: plantUmlEncode } = await import('plantuml-encoder');
-
-    // retrieve and manually adapt the SVG, to remove the background
-    const encodedPlantUML: string = plantUmlEncode(plantUmlCode);
-    const response = await frontendSideFetch(`${plantUmlServerUrl}${encodedPlantUML}`);
-    text = await response.text();
-  } catch (error) {
-    console.error('Error rendering PlantUML on server:', plantUmlServerUrl, error);
-    return null;
-  }
-
-  // validate/extract the SVG
-  const start = text.indexOf('<svg ');
-  const end = text.indexOf('</svg>');
-  if (start < 0 || end <= start)
-    throw new Error('Could not render PlantUML');
-
-  // remove the background color
-  const svg = text
-    .slice(start, end + 6) // <svg ... </svg>
-    .replace('background:#FFFFFF;', '');
-
-  // check for syntax errors
-  if (svg.includes('>Syntax Error?</text>'))
-    throw new Error('llm syntax issue (it happens!). Please regenerate or change the language model.');
-
-  return svg;
-}
+// style for line-numbers
+import './RenderCode.css';
 
 
-export const OverlayButton = styled(IconButton)(({ theme, variant }) => ({
-  backgroundColor: variant === 'outlined' ? theme.palette.background.surface : undefined,
-  '--Icon-fontSize': theme.fontSize.lg,
-})) as typeof IconButton;
+// configuration
+const ALWAYS_SHOW_OVERLAY = true;
+
+// Perf: while streaming a large code block, throttle Prism re-highlighting (decimator ~15Hz -> capped here to ~7Hz).
+// Set BYTES to 0 to disable the optimization entirely (zero runtime cost when disabled).
+const PARTIAL_HIGHLIGHT_THROTTLE_BYTES = 8 * 1024;
+const PARTIAL_HIGHLIGHT_THROTTLE_MS = 150;
 
 
-export const overlayButtonsSx: SxProps = {
-  position: 'absolute', top: 0, right: 0, zIndex: 2, /* top of message and its chips */
-  display: 'flex', flexDirection: 'row', gap: 1,
-  opacity: 0, transition: 'opacity 0.2s cubic-bezier(.17,.84,.44,1)',
-  // buttongroup: background
-  '& > div > button': {
-    // backgroundColor: 'background.surface',
-    // backdropFilter: 'blur(12px)',
-  },
-};
+// RenderCode
 
+export const renderCodeMemoOrNot = (memo: boolean) => memo ? RenderCodeMemo : RenderCode;
+
+export const RenderCodeMemo = React.memo(RenderCode);
 
 interface RenderCodeBaseProps {
-  codeBlock: CodeBlock,
+  semiStableId: string | undefined,
+  title: string,
+  code: string,
+  isPartial: boolean,
   fitScreen?: boolean,
-  noCopyButton?: boolean,
-  optimizeLightweight?: boolean,
   initialShowHTML?: boolean,
+  noCopyButton?: boolean,
+  optimizeLightweight?: boolean, // set when non-memoed and partial
+  onReplaceInCode?: (search: string, replace: string) => boolean;
+  renderHideTitle?: boolean,
   sx?: SxProps,
 }
 
-interface RenderCodeImplProps extends RenderCodeBaseProps {
-  highlightCode: (inferredCodeLanguage: string | null, blockCode: string) => string,
-  inferCodeLanguage: (blockTitle: string, code: string) => string | null,
+function RenderCode(props: RenderCodeBaseProps) {
+  return (
+    <React.Suspense
+      fallback={
+        // Mimic the structure of the RenderCodeImpl - to mitigate race conditions that could cause problematic rendering
+        // of code (where two components were missing from the structure)
+        <Box sx={_styles.renderCodecontainer}>
+          <Box component='code' className='language-unknown' aria-label='Displaying Code...' sx={{ p: 1.5, display: 'block', ...props.sx }}>
+            <Box component='span' sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+              <Box component='span' className='code-container' aria-label='Code block'>
+                {/* Just wait until the correct implementation renders */}
+              </Box>
+            </Box>
+          </Box>
+        </Box>
+      }
+    >
+      <_DynamicPrism {...props} />
+    </React.Suspense>
+  );
 }
 
-function RenderCodeImpl(props: RenderCodeImplProps) {
+
+// Lazy loader of the heavy prism functions
+const _DynamicPrism = React.lazy(async () => {
+
+  // Dynamically import the code highlight functions
+  const { highlightCode, inferCodeLanguage } = await import('~/modules/blocks/code/code-highlight/codePrism');
+
+  return {
+    default: (props: RenderCodeBaseProps) => <RenderCodeImpl highlightCode={highlightCode} inferCodeLanguage={inferCodeLanguage} {...props} />,
+  };
+});
+
+
+// Actual implemetation of the code rendering
+
+const _styles = {
+  renderCodecontainer: {
+    // position the overlay buttons - this has to be one level up from the code, otherwise the buttons will h-scroll with the code
+    position: 'relative',
+
+    // style
+    '--IconButton-radius': OVERLAY_BUTTON_RADIUS,
+
+    // fade in children buttons
+    [`&:hover > .${overlayButtonsClassName}`]: overlayButtonsActiveSx,
+  },
+
+  blockTitle: {
+    backgroundColor: 'background.popup',
+    boxShadow: 'xs',
+    borderRadius: 'sm',
+    border: '1px solid var(--joy-palette-neutral-outlinedBorder)',
+    m: -0.5,
+    mb: 1.5,
+  },
+  blockTitleText: {
+    px: 1,
+    py: 0.5,
+    color: 'text.primary',
+  },
+
+  fullscreenSyntaxFix: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+  },
+} as const satisfies Record<string, SxProps>;
+
+const overlayGridSx: SxProps = {
+  ...overlayButtonsTopRightSx,
+  display: 'grid',
+  gap: 0.5,
+  justifyItems: 'end',
+};
+
+const overlayFirstRowSx: SxProps = {
+  display: 'flex',
+  gap: 0.5,
+};
+
+
+function RenderCodeImpl(props: RenderCodeBaseProps & {
+  highlightCode: (inferredCodeLanguage: string | null, code: string, addLineNumbers: boolean) => string,
+  inferCodeLanguage: (blockTitle: string, code: string) => string | null,
+}) {
 
   // state
+  // const [isHovering, setIsHovering] = React.useState(false);
   const [fitScreen, setFitScreen] = React.useState(!!props.fitScreen);
+  const [htmlReloadKey, setHtmlReloadKey] = React.useState(0);
   const [showHTML, setShowHTML] = React.useState(props.initialShowHTML === true);
   const [showMermaid, setShowMermaid] = React.useState(true);
   const [showPlantUML, setShowPlantUML] = React.useState(true);
   const [showSVG, setShowSVG] = React.useState(true);
-  const [softWrap, setSoftWrap] = useUIPreferencesStore(state => [state.renderCodeSoftWrap, state.setRenderCodeSoftWrap]);
+  const fullScreenElementRef = React.useRef<HTMLDivElement>(null);
+
+  // external state
+  const { isFullscreen, enterFullscreen, exitFullscreen } = useFullscreenElement(fullScreenElementRef);
+  const { overlayRef, overlayBoundaryRef } = useStickyCodeOverlay({ disabled: props.optimizeLightweight || isFullscreen });
+
+  // sticky overlay positioning
+  const { uiComplexityMode, showLineNumbers, showSoftWrap, setShowLineNumbers, setShowSoftWrap } = useUIPreferencesStore(useShallow(state => ({
+    uiComplexityMode: state.complexityMode,
+    showLineNumbers: state.renderCodeLineNumbers,
+    showSoftWrap: state.renderCodeSoftWrap,
+    setShowLineNumbers: state.setRenderCodeLineNumbers,
+    setShowSoftWrap: state.setRenderCodeSoftWrap,
+  })));
 
   // derived props
   const {
-    codeBlock: { blockTitle, blockCode, complete: blockComplete },
-    highlightCode, inferCodeLanguage,
-    optimizeLightweight,
+    title: blockTitle,
+    code,
+    isPartial: blockIsPartial,
+    highlightCode,
+    inferCodeLanguage,
   } = props;
 
-  // heuristic for language, and syntax highlight
-  const { highlightedCode, inferredCodeLanguage } = React.useMemo(() => {
-    const inferredCodeLanguage = inferCodeLanguage(blockTitle, blockCode);
-    const highlightedCode = highlightCode(inferredCodeLanguage, blockCode);
-    return { highlightedCode, inferredCodeLanguage };
-  }, [inferCodeLanguage, blockTitle, blockCode, highlightCode]);
+  const noTooltips = props.optimizeLightweight /*|| !isHovering*/;
+
+
+  // handlers
+
+  // const handleMouseOverEnter = React.useCallback(() => setIsHovering(true), []);
+
+  // const handleMouseOverLeave = React.useCallback(() => setIsHovering(false), []);
+
+  // Optimization: stabilize the copy handler
+  const codeRef = React.useRef(code);
+  codeRef.current = code;
+  const handleCopyToClipboard = React.useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    copyToClipboard(codeRef.current, 'Code');
+  }, []);
 
 
   // heuristics for specialized rendering
 
-  const isHTML = heuristicIsHtml(blockCode);
-  const renderHTML = isHTML && showHTML;
+  const lcBlockTitle = blockTitle.trim().toLowerCase();
 
-  const isMermaid = blockTitle === 'mermaid' && blockComplete;
-  const renderMermaid = isMermaid && showMermaid;
+  const isHTMLCode = heuristicIsBlockPureHTML(code);
+  const renderHTML = isHTMLCode && showHTML;
 
-  const isPlantUML =
-    (blockCode.startsWith('@startuml') && blockCode.endsWith('@enduml'))
-    || (blockCode.startsWith('@startmindmap') && blockCode.endsWith('@endmindmap'))
-    || (blockCode.startsWith('@startsalt') && blockCode.endsWith('@endsalt'))
-    || (blockCode.startsWith('@startwbs') && blockCode.endsWith('@endwbs'))
-    || (blockCode.startsWith('@startgantt') && blockCode.endsWith('@endgantt'));
+  const isMermaidCode = lcBlockTitle === 'mermaid' && !blockIsPartial;
+  const renderMermaid = isMermaidCode && showMermaid;
 
-  let renderPlantUML = isPlantUML && showPlantUML;
-  const { data: plantUmlHtmlData, error: plantUmlError } = useQuery({
-    enabled: renderPlantUML,
-    queryKey: ['plantuml', blockCode],
-    queryFn: () => fetchPlantUmlSvg(blockCode),
-    staleTime: 24 * 60 * 60 * 1000, // 1 day
-  });
-  renderPlantUML = renderPlantUML && (!!plantUmlHtmlData || !!plantUmlError);
+  const isPlantUMLCode = heuristicIsCodePlantUML(code.trim());
+  let renderPlantUML = isPlantUMLCode && showPlantUML;
+  const { data: plantUmlSvgData, error: plantUmlError } = usePlantUmlSvg(renderPlantUML, code);
+  renderPlantUML = renderPlantUML && (!!plantUmlSvgData || !!plantUmlError);
 
-  const isSVG = (blockCode.startsWith('<svg') || blockCode.startsWith('<?xml version="1.0" encoding="UTF-8"?>\n<svg')) && blockCode.endsWith('</svg>');
-  const renderSVG = isSVG && showSVG;
-  const canScaleSVG = renderSVG && blockCode.includes('viewBox="');
+  const isSVGCode = heuristicIsSVGCode(code);
+  const renderSVG = isSVGCode && showSVG;
+  const canScaleSVG = renderSVG && code.includes('viewBox="');
+
+  const renderSyntaxHighlight = !renderHTML && !renderMermaid && !renderPlantUML && !renderSVG;
+  const cannotRenderLineNumbers = !renderSyntaxHighlight || showSoftWrap;
+  const renderLineNumbers = !cannotRenderLineNumbers && ((showLineNumbers && uiComplexityMode !== 'minimal') || isFullscreen);
 
 
-  const canCodePen = blockComplete && isCodePenSupported(inferredCodeLanguage, isSVG);
-  const canJSFiddle = blockComplete && isJSFiddleSupported(inferredCodeLanguage, blockCode);
-  const canStackBlitz = blockComplete && isStackBlitzSupported(inferredCodeLanguage);
+  // Language & Highlight (2-stages)
+  const inferredCodeLanguage = React.useMemo(() => {
+    // shortcut - this mimics a similar path in inferCodeLanguage
+    if (isHTMLCode)
+      return 'html';
+    // workhorse - could be slow, hence the memo
+    return inferCodeLanguage(blockTitle, code);
+  }, [blockTitle, code, inferCodeLanguage, isHTMLCode]);
 
 
-  const handleCopyToClipboard = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    copyToClipboard(blockCode, 'Code');
-  };
+  // Optimization 1: highlight decimation: max 6.6Hz throttle during large partial streams, as skipped intermediates are harmless.
+  const snapRef = React.useRef({ at: 0, code });
+  const throttle = !!PARTIAL_HIGHLIGHT_THROTTLE_BYTES && blockIsPartial && code.length > PARTIAL_HIGHLIGHT_THROTTLE_BYTES;
+  const now = throttle ? performance.now() : 0;
+  if (!throttle || now - snapRef.current.at >= PARTIAL_HIGHLIGHT_THROTTLE_MS) {
+    snapRef.current.at = now;
+    snapRef.current.code = code;
+  }
+  const throttledCodeForHighlight = snapRef.current.code;
+
+  // Optimization 2: highlight cancellation: React-defer the *input* to Prism syntax highlight memo -> the highlight pass runs in a low-priority, interruptible render.
+  // A higher-priority update (input, scroll, another state change) aborts the pending pass -- so rapid streaming updates coalesce
+  // into fewer Prism runs under pressure.
+  const deferredCodeForHighlight = React.useDeferredValue(throttledCodeForHighlight);
+
+  const codeSyntaxHtml = React.useMemo(() => {
+    // fast-off
+    if (!renderSyntaxHighlight || !deferredCodeForHighlight)
+      return null;
+    return highlightCode(inferredCodeLanguage, deferredCodeForHighlight, renderLineNumbers);
+  }, [deferredCodeForHighlight, highlightCode, inferredCodeLanguage, renderLineNumbers, renderSyntaxHighlight]);
+
+
+  // Title
+  let showBlockTitle = !props.renderHideTitle && (blockTitle != inferredCodeLanguage) && (blockTitle.includes('.') || blockTitle.includes('://'));
+  // Beautify: hide the block title when rendering HTML
+  if (renderHTML)
+    showBlockTitle = false;
+  const isBorderless = (renderHTML || renderSVG) && !showBlockTitle;
+
+
+  // style
+
+  const isRenderingDiagram = renderMermaid || renderPlantUML;
+
+  const codeSx: SxProps = React.useMemo(() => ({
+
+    // style
+    p: isBorderless ? 0 : 1.5, // this block gets a thicker border (but we 'fullscreen' html in case there's no title)
+    overflowX: 'auto', // ensure per-block x-scrolling
+    whiteSpace: showSoftWrap ? 'break-spaces' : 'pre',
+
+    // layout
+    display: 'flex',
+    flexDirection: 'column',
+    // justifyContent: (renderMermaid || renderPlantUML) ? 'center' : undefined,
+
+    // in fullscreen mode, amplify contrast
+    ...isFullscreen && { backgroundColor: 'background.surface' },
+
+    // fix for SVG diagrams over dark mode: https://github.com/enricoros/big-AGI/issues/520
+    '[data-joy-color-scheme="dark"] &': isRenderingDiagram ? { backgroundColor: 'neutral.500' } : {},
+
+    // lots more style, incl font, background, embossing, radius, etc.
+    ...props.sx,
+
+  }), [isBorderless, isFullscreen, isRenderingDiagram, props.sx, showSoftWrap]);
+
 
   return (
-    <Box sx={{
-      position: 'relative', /* for overlay buttons to stick properly */
-    }}>
+    <Box
+      ref={overlayBoundaryRef}
+      // onMouseEnter={handleMouseOverEnter}
+      // onMouseLeave={handleMouseOverLeave}
+      sx={_styles.renderCodecontainer}
+    >
 
-      {/* Code render */}
       <Box
+        ref={fullScreenElementRef}
         component='code'
-        className={`language-${inferredCodeLanguage || 'unknown'}`}
-        sx={{
-          whiteSpace: softWrap ? 'break-spaces' : 'pre', // was 'break-spaces' before we implemented per-block scrolling
-          mx: 0, p: 1.5, // this block gets a thicker border
-          display: 'flex',
-          flexDirection: 'column',
-          // justifyContent: (renderMermaid || renderPlantUML) ? 'center' : undefined,
-          overflowX: 'auto',
-          minWidth: 160,
-          '&:hover > .overlay-buttons': { opacity: 1 },
-          ...(props.sx || {}),
-          // fix for SVG diagrams over dark mode: https://github.com/enricoros/big-AGI/issues/520
-          '[data-joy-color-scheme="dark"] &': (renderPlantUML || renderMermaid) ? {
-            backgroundColor: 'neutral.300',
-          } : {},
-        }}>
+        className={`language-${inferredCodeLanguage || 'unknown'}${renderLineNumbers ? ' line-numbers' : ''}`}
+        sx={codeSx}
+      >
 
         {/* Markdown Title (File/Type) */}
-        {blockTitle != inferredCodeLanguage && (blockTitle.includes('.') || blockTitle.includes('://')) && (
-          <Sheet sx={{ backgroundColor: 'background.surface', boxShadow: 'xs', borderRadius: 'xs', m: -0.5, mb: 1.5 }}>
-            <Typography level='body-sm' sx={{ px: 1, py: 0.5, color: 'text.primary' }}>
+        {showBlockTitle && (
+          <Sheet sx={_styles.blockTitle}>
+            <Typography level='body-sm' sx={_styles.blockTitleText} className='agi-ellipsize'>
               {blockTitle}
               {/*{inferredCodeLanguage}*/}
             </Typography>
           </Sheet>
         )}
 
-        {/* Renders HTML, or inline SVG, inline plantUML rendered, or highlighted code */}
-        {renderHTML
-          ? <IFrameComponent htmlString={blockCode} />
-          : renderMermaid
-            ? <RenderCodeMermaid mermaidCode={blockCode} fitScreen={fitScreen} />
-            : <Box component='div'
-                   dangerouslySetInnerHTML={{
-                     __html:
-                       renderSVG
-                         ? (patchSvgString(fitScreen, blockCode) || 'No SVG code')
-                         : renderPlantUML
-                           ? (patchSvgString(fitScreen, plantUmlHtmlData) || (plantUmlError as string) || 'No PlantUML rendering.')
-                           : highlightedCode,
-                   }}
-                   sx={{
-                     ...(renderSVG ? { lineHeight: 0 } : {}),
-                     ...(renderPlantUML ? { textAlign: 'center', mx: 'auto' } : {}),
-                   }}
-            />}
-
-        {/* Buttons */}
-        <Box className='overlay-buttons' sx={{ ...overlayButtonsSx, p: 0.5 }}>
-          {/* Show HTML */}
-          {isHTML && (
-            <Tooltip title={optimizeLightweight ? null : renderHTML ? 'Hide' : 'Show Web Page'}>
-              <OverlayButton variant={renderHTML ? 'solid' : 'outlined'} color='danger' onClick={() => setShowHTML(!showHTML)}>
-                <HtmlIcon sx={{ fontSize: 'xl2' }} />
-              </OverlayButton>
-            </Tooltip>
-          )}
-
-          {/* Show SVG */}
-          {isSVG && (
-            <Tooltip title={optimizeLightweight ? null : renderSVG ? 'Show Code' : 'Render SVG'}>
-              <OverlayButton variant={renderSVG ? 'solid' : 'outlined'} onClick={() => setShowSVG(!showSVG)}>
-                <ShapeLineOutlinedIcon />
-              </OverlayButton>
-            </Tooltip>
-          )}
-
-          {/* Show Diagrams */}
-          {(isMermaid || isPlantUML) && (
-            <ButtonGroup aria-label='Diagram'>
-              {/* Toggle rendering */}
-              <Tooltip title={optimizeLightweight ? null : (renderMermaid || renderPlantUML) ? 'Show Code' : 'Render Mermaid'}>
-                <OverlayButton variant={(renderMermaid || renderPlantUML) ? 'solid' : 'outlined'} onClick={() => {
-                  if (isMermaid) setShowMermaid(on => !on);
-                  if (isPlantUML) setShowPlantUML(on => !on);
-                }}>
-                  <SchemaIcon />
-                </OverlayButton>
-              </Tooltip>
-
-              {/* Fit-To-Screen */}
-              {((isMermaid && showMermaid) || (isPlantUML && showPlantUML && !plantUmlError) || (isSVG && showSVG && canScaleSVG)) && (
-                <Tooltip title={optimizeLightweight ? null : fitScreen ? 'Original Size' : 'Fit Screen'}>
-                  <OverlayButton variant={fitScreen ? 'solid' : 'outlined'} onClick={() => setFitScreen(on => !on)}>
-                    <FitScreenIcon />
-                  </OverlayButton>
-                </Tooltip>
-              )}
-            </ButtonGroup>
-          )}
-
-          {/* New Code Window Buttons */}
-          {(canJSFiddle || canCodePen || canStackBlitz) && (
-            <ButtonGroup aria-label='Open code in external editors'>
-              {canJSFiddle && <ButtonJsFiddle code={blockCode} language={inferredCodeLanguage!} />}
-              {canCodePen && <ButtonCodePen code={blockCode} language={inferredCodeLanguage!} />}
-              {canStackBlitz && <ButtonStackBlitz code={blockCode} title={blockTitle} language={inferredCodeLanguage!} />}
-            </ButtonGroup>
-          )}
-
-          {/* Soft Wrap toggle */}
-          {(!renderHTML && !renderMermaid && !renderPlantUML && !renderSVG) && (
-            <Tooltip title='Toggle Soft Wrap'>
-              <OverlayButton variant={softWrap ? 'solid' : 'outlined'} onClick={() => setSoftWrap(!softWrap)}>
-                <WrapTextIcon />
-              </OverlayButton>
-            </Tooltip>
-          )}
-
-          {/* Copy */}
-          {props.noCopyButton !== true && (
-            <Tooltip title={optimizeLightweight ? null : 'Copy Code'}>
-              <OverlayButton variant='outlined' onClick={handleCopyToClipboard}>
-                <ContentCopyIcon />
-              </OverlayButton>
-            </Tooltip>
-          )}
-        </Box>
+        {/* NOTE: this 'div' is only here to avoid some sort of collapse of the RenderCodeSyntax,
+            which box disappears for some reason and the parent flex layout ends up lining up
+            chars in a non-proper way.
+            Since this damages the 'fullscreen' operation, we restore it somehow.
+        */}
+        <span style={!isFullscreen ? undefined : _styles.fullscreenSyntaxFix}>
+          {/* Renders HTML, or inline SVG, inline plantUML rendered, or highlighted code */}
+          {renderHTML ? <RenderCodeHtmlIFrame key={htmlReloadKey} htmlCode={code} isFullscreen={isFullscreen} />
+            : renderMermaid ? <RenderCodeMermaid mermaidCode={code} fitScreen={fitScreen} />
+              : renderSVG ? <RenderCodeSVG svgCode={code} fitScreen={fitScreen} />
+                : (renderPlantUML && (plantUmlSvgData || plantUmlError)) ? <RenderCodePlantUML svgCode={plantUmlSvgData ?? null} error={plantUmlError} fitScreen={fitScreen} />
+                  : <RenderCodeSyntax highlightedSyntaxAsHtml={codeSyntaxHtml} presenterMode={isFullscreen} />}
+        </span>
 
       </Box>
+
+      {/* [overlay] Buttons (Code blocks (SVG, diagrams, HTML, syntax, ...)) */}
+      {(ALWAYS_SHOW_OVERLAY /*|| isHovering*/) && (
+        <Box
+          ref={overlayRef}
+          className={overlayButtonsClassName}
+          sx={overlayGridSx}
+        >
+
+          {/* [row 1] */}
+          <Box sx={overlayFirstRowSx}>
+
+            {/* Show HTML + Reload */}
+            {isHTMLCode && (
+              <ButtonGroup aria-label='HTML options' sx={overlayGroupWithShadowSx}>
+                <OverlayButton tooltip={noTooltips ? null : renderHTML ? 'Show Code' : 'Show Web Page'} variant={renderHTML ? 'solid' : 'outlined'} color='danger' onClick={() => setShowHTML(!showHTML)}>
+                  <HtmlIcon sx={{ fontSize: 'xl2' }} />
+                </OverlayButton>
+                {renderHTML && (
+                  <OverlayButton tooltip={noTooltips ? null : 'Reload'} variant='outlined' color='danger' onClick={() => setHtmlReloadKey(k => k + 1)}>
+                    <ReplayRoundedIcon />
+                  </OverlayButton>
+                )}
+              </ButtonGroup>
+            )}
+
+            {/* SVG, Mermaid, PlantUML -- including a max-out button */}
+            {(isSVGCode || isMermaidCode || isPlantUMLCode) && (
+              <ButtonGroup aria-label='Diagram' sx={overlayGroupWithShadowSx}>
+                {/* Toggle rendering */}
+                <OverlayButton
+                  tooltip={noTooltips ? null
+                    : (renderSVG || renderMermaid || renderPlantUML) ? 'Show Code'
+                      : isSVGCode ? 'Render SVG'
+                        : isMermaidCode ? 'Mermaid Diagram'
+                          : 'PlantUML Diagram'
+                  }
+                  variant={(renderMermaid || renderPlantUML) ? 'solid' : 'outlined'}
+                  color={isSVGCode ? 'warning' : undefined}
+                  onClick={() => {
+                    if (isSVGCode) setShowSVG(on => !on);
+                    if (isMermaidCode) setShowMermaid(on => !on);
+                    if (isPlantUMLCode) setShowPlantUML(on => !on);
+                  }}>
+                  {isSVGCode ? <ChangeHistoryTwoToneIcon /> : <SquareTwoToneIcon />}
+                </OverlayButton>
+
+                {/* Fit-Content */}
+                {((isMermaidCode && showMermaid) || (isPlantUMLCode && showPlantUML && !plantUmlError) || (isSVGCode && showSVG && canScaleSVG)) && (
+                  <OverlayButton tooltip={noTooltips ? null : fitScreen ? 'Original Size' : 'Fit Content'} variant={fitScreen ? 'solid' : 'outlined'} onClick={() => setFitScreen(on => !on)}>
+                    <FitScreenIcon />
+                  </OverlayButton>
+                )}
+              </ButtonGroup>
+            )}
+
+            {/* Group: Text Options */}
+            <ButtonGroup aria-label='Text and code options' sx={overlayGroupWithShadowSx}>
+
+              {/* Fullscreen */}
+              <OverlayButton tooltip={noTooltips ? null : isFullscreen ? 'Exit Fullscreen' : !renderSyntaxHighlight ? 'Fullscreen' : 'Present'} variant={isFullscreen ? 'solid' : 'outlined'} onClick={isFullscreen ? exitFullscreen : enterFullscreen}>
+                <ZoomOutMapIcon sx={{ fontSize: 'xl' }} />
+              </OverlayButton>
+
+              {/* Soft Wrap toggle */}
+              {renderSyntaxHighlight && (
+                <OverlayButton tooltip={noTooltips ? null : 'Wrap Lines'} disabled={!renderSyntaxHighlight} variant={(showSoftWrap && renderSyntaxHighlight) ? 'solid' : 'outlined'} onClick={() => setShowSoftWrap(!showSoftWrap)}>
+                  <WrapTextIcon />
+                </OverlayButton>
+              )}
+
+              {/* Line Numbers toggle */}
+              {renderSyntaxHighlight && uiComplexityMode !== 'minimal' && (
+                <OverlayButton tooltip={noTooltips ? null : 'Line Numbers'} disabled={cannotRenderLineNumbers} variant={(renderLineNumbers && renderSyntaxHighlight) ? 'solid' : 'outlined'} onClick={() => setShowLineNumbers(!showLineNumbers)}>
+                  <NumbersRoundedIcon />
+                </OverlayButton>
+              )}
+
+              {/* Copy */}
+              {props.noCopyButton !== true && (
+                <OverlayButton tooltip={noTooltips ? null : 'Copy Code'} variant='outlined' onClick={handleCopyToClipboard}>
+                  <ContentCopyIcon />
+                </OverlayButton>
+              )}
+            </ButtonGroup>
+
+          </Box>
+
+        </Box>
+      )}
+
     </Box>
   );
 }
-
-// Dynamically import the heavy prism functions
-const RenderCodeDynamic = React.lazy(async () => {
-
-  // Dynamically import the code highlight functions
-  const { highlightCode, inferCodeLanguage } = await import('./codePrism');
-
-  return {
-    default: (props: RenderCodeBaseProps) =>
-      <RenderCodeImpl highlightCode={highlightCode} inferCodeLanguage={inferCodeLanguage} {...props} />,
-  };
-});
-
-export function RenderCode(props: RenderCodeBaseProps) {
-  return (
-    <React.Suspense fallback={<Box component='code' sx={{ p: 1.5, display: 'block', ...props.sx }} />}>
-      <RenderCodeDynamic {...props} />
-    </React.Suspense>
-  );
-}
-
-export const RenderCodeMemo = React.memo(RenderCode);

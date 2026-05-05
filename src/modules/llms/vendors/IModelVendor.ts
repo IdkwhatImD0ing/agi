@@ -1,63 +1,44 @@
-import type React from 'react';
-
-import type { SvgIconProps } from '@mui/joy';
+import type { AixAPI_Access } from '~/modules/aix/server/api/aix.wiretypes';
 
 import type { BackendCapabilities } from '~/modules/backend/store-backend-capabilities';
+import type { DLLM } from '~/common/stores/llms/llms.types';
 
-import type { DLLM, DLLMId, DModelSourceId } from '../store-llms';
 import type { ModelDescriptionSchema } from '../server/llm.server.types';
 import type { ModelVendorId } from './vendors.registry';
-import type { StreamingClientUpdate } from './unifiedStreamingClient';
-import type { VChatContextRef, VChatFunctionIn, VChatGenerateContextName, VChatMessageIn, VChatMessageOrFunctionCallOut, VChatMessageOut, VChatStreamContextName } from '../llm.client';
 
 
-export interface IModelVendor<TSourceSetup = unknown, TAccess = unknown, TLLMOptions = unknown, TDLLM = DLLM<TSourceSetup, TLLMOptions>> {
+type ServiceSettingsBase = {
+  csf?: boolean,
+  [key: string]: any,
+};
+
+export interface IModelVendor<TServiceSettings extends ServiceSettingsBase = {}, TAccess = AixAPI_Access> {
   readonly id: ModelVendorId;
   readonly name: string;
-  readonly rank: number;
+  readonly displayRank: number; // [10...] Foundation Models, [30...] 3rd party Clouds, [40...] Aggregators, [50...] Local Models
+  readonly displayGroup: 'popular' | 'cloud' | 'local';
   readonly location: 'local' | 'cloud';
-  readonly instanceLimit: number;
+  readonly brandColor?: string;
+  readonly instanceLimit?: number;
   readonly hasFreeModels?: boolean;
-  readonly hasBackendCapFn?: (backendCapabilities: BackendCapabilities) => boolean; // used to show a 'geen checkmark' in the list of vendors when adding sources
-  readonly hasBackendCapKey?: keyof BackendCapabilities;
+  readonly hasServerConfigFn?: (backendCapabilities: BackendCapabilities) => boolean; // used to show a 'green checkmark' in the list of vendors when adding services
+  readonly hasServerConfigKey?: keyof BackendCapabilities;
 
-  // components
-  readonly Icon: React.FunctionComponent<SvgIconProps>;
-  readonly SourceSetupComponent: React.ComponentType<{ sourceId: DModelSourceId }>;
-  readonly LLMOptionsComponent: React.ComponentType<{ llm: TDLLM }>;
+  /// client-side-fetch ///
+  readonly csfAvailable?: (setup?: Partial<TServiceSettings>) => boolean; // undefined: not supported, false: conditions not met
 
   /// abstraction interface ///
 
-  initializeSetup?(): TSourceSetup;
+  initializeSetup?(): TServiceSettings;
 
-  validateSetup?(setup: TSourceSetup): boolean; // client-side only, accessed via useSourceSetup
+  validateSetup?(setup: TServiceSettings): boolean; // client-side only, accessed via useServiceSetup
 
-  getTransportAccess(setup?: Partial<TSourceSetup>): TAccess;
+  getTransportAccess(setup?: Partial<TServiceSettings>): TAccess;
 
-  getRateLimitDelay?(llm: TDLLM, setup: Partial<TSourceSetup>): number;
+  rateLimitChatGenerate?(llm: DLLM, setup: Partial<TServiceSettings>): Promise<void>;
 
-  rpcUpdateModelsOrThrow: (
+  rpcUpdateModelsOrThrow(
     access: TAccess,
-  ) => Promise<{ models: ModelDescriptionSchema[] }>;
-
-  rpcChatGenerateOrThrow: (
-    access: TAccess,
-    llmOptions: TLLMOptions,
-    messages: VChatMessageIn[],
-    contextName: VChatGenerateContextName, contextRef: VChatContextRef | null,
-    functions: VChatFunctionIn[] | null, forceFunctionName: string | null,
-    maxTokens?: number,
-  ) => Promise<VChatMessageOut | VChatMessageOrFunctionCallOut>;
-
-  streamingChatGenerateOrThrow: (
-    access: TAccess,
-    llmId: DLLMId,
-    llmOptions: TLLMOptions,
-    messages: VChatMessageIn[],
-    contextName: VChatStreamContextName, contextRef: VChatContextRef,
-    functions: VChatFunctionIn[] | null, forceFunctionName: string | null,
-    abortSignal: AbortSignal,
-    onUpdate: (update: StreamingClientUpdate, done: boolean) => void,
-  ) => Promise<void>;
+  ): Promise<{ models: ModelDescriptionSchema[] }>;
 
 }

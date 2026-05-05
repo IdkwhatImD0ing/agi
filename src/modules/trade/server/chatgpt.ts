@@ -1,22 +1,22 @@
 import { TRPCError } from '@trpc/server';
-import { z } from 'zod';
+import * as z from 'zod/v4';
 
 
 const chatGptMessageSchema = z.object({
   id: z.string(),
   author: z.object({
     role: z.enum(['user', 'assistant', 'system', 'tool']),
-    metadata: z.record(z.unknown()),
+    metadata: z.record(z.string(), z.unknown()),
   }),
   create_time: z.optional(z.number()),
   content: z.object({
-    content_type: z.enum(['text', 'code', 'execution_output']),
+    content_type: z.enum(['text', 'code', 'execution_output', 'model_editable_context']),
     parts: z.optional(z.array(z.string())), // [''] if author.role === 'system', optional if content_type === 'code'
   }),
   status: z.string(),
   end_turn: z.optional(z.boolean()),
   weight: z.number(),
-  metadata: z.record(z.unknown()),
+  metadata: z.record(z.string(), z.unknown()),
   recipient: z.string(), // wazs: z.enum(['all', 'python']), but can be a plugin full name too
 });
 
@@ -31,7 +31,7 @@ export const chatGptSharedChatSchema = z.object({
   title: z.string(),
   create_time: z.number(),
   update_time: z.number(),
-  // mapping: z.record(chatGptNodeSchema), // comment out, to reduce the data transfer - 'duplicate' of linear_conversation
+  // mapping: z.record(z.string(), chatGptNodeSchema), // comment out, to reduce the data transfer - 'duplicate' of linear_conversation
   moderation_results: z.array(z.unknown()),
   current_node: z.string(),
   is_public: z.boolean(),
@@ -45,7 +45,7 @@ export const chatGptSharedChatSchema = z.object({
     description: z.string(),
     tags: z.array(z.string()),
   }),
-  moderation_state: z.record(z.unknown()),
+  moderation_state: z.record(z.string(), z.unknown()),
 });
 
 export type ChatGptSharedChatSchema = z.infer<typeof chatGptSharedChatSchema>;
@@ -68,7 +68,7 @@ const chatGptSharedChatPage = z.object({
 
 export function chatGptParseConversation(htmlPage: string) {
   // extract embedded JSON string
-  const jsonString = htmlPage.match(/<script id="__NEXT_DATA__" type="application\/json">(.*?)<\/script>/)?.[1];
+  const jsonString = htmlPage.match(/<script id="__NEXT_DATA__" type="application\/json"[^>]*>(.*?)<\/script>/s)?.[1];
   if (!jsonString)
     throw new TRPCError({
       code: 'BAD_REQUEST',
