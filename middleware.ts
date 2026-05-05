@@ -2,7 +2,7 @@ import { authMiddleware } from "@clerk/nextjs";
 
 export default authMiddleware({
 
-    publicRoutes: ["/", "/link", "/privacy", "/terms", "/api/trpc-edge/backend.listCapabilities"],
+    publicRoutes: ["/", "/link", "/privacy", "/terms", "/api/edge/backend.listCapabilities"],
 });
 
 export const config = {
