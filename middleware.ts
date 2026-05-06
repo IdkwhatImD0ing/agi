@@ -7,6 +7,7 @@ const isPublicRoute = createRouteMatcher([
     "/terms(.*)",
     "/sign-in(.*)",
     "/sign-up(.*)",
+    "/manifest.json",
     "/api/edge/backend.listCapabilities",
 ]);
 
