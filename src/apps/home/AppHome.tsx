@@ -1,10 +1,28 @@
 import { useState, useEffect } from 'react';
-import { Box, Typography, Button, CssVarsProvider } from '@mui/joy';
+import { Box, Button, Card, CardContent, Chip, Typography } from '@mui/joy';
 import { Show, SignInButton, SignUpButton, UserButton, useUser } from '@clerk/nextjs';
 import { doc, getDoc } from 'firebase/firestore';
 import { useRouter } from 'next/router';
 
 import { firestore } from '../../firebase';
+import { PublicPageShell } from './PublicPageShell';
+
+
+const valueCards = [
+  {
+    title: 'One workspace',
+    description: 'Bring chat, files, models, and tools into a focused interface built for long sessions.',
+  },
+  {
+    title: 'Model freedom',
+    description: 'Use your own provider keys and move between leading AI systems without changing your workflow.',
+  },
+  {
+    title: 'Local-first by design',
+    description: 'Keep the product fast, personal, and resilient with the project architecture Big-AGI is known for.',
+  },
+];
+
 
 export default function Home() {
   const { isSignedIn, user } = useUser();
@@ -33,83 +51,114 @@ export default function Home() {
   }, [user]);
 
   return (
-    <CssVarsProvider>
-      <Box
-        sx={{
-          minHeight: '100vh',
-          display: 'flex',
-          flexDirection: 'column',
-          justifyContent: 'center',
-          alignItems: 'center',
-          background: `radial-gradient(circle at 84% 82%, rgba(217, 217, 217,0.03) 0%, rgba(217, 217, 217,0.03) 21%,transparent 21%, transparent 100%),radial-gradient(circle at 75% 56%, rgba(3, 3, 3,0.03) 0%, rgba(3, 3, 3,0.03) 30%,transparent 30%, transparent 100%),radial-gradient(circle at 74% 53%, rgba(153, 153, 153,0.03) 0%, rgba(153, 153, 153,0.03) 95%,transparent 95%, transparent 100%),radial-gradient(circle at 86% 43%, rgba(209, 209, 209,0.03) 0%, rgba(209, 209, 209,0.03) 83%,transparent 83%, transparent 100%),radial-gradient(circle at 64% 88%, rgba(192, 192, 192,0.03) 0%, rgba(192, 192, 192,0.03) 2%,transparent 2%, transparent 100%),radial-gradient(circle at 73% 77%, rgba(205, 205, 205,0.03) 0%, rgba(205, 205, 205,0.03) 18%,transparent 18%, transparent 100%),radial-gradient(circle at 57% 51%, rgba(161, 161, 161,0.03) 0%, rgba(161, 161, 161,0.03) 64%,transparent 64%, transparent 100%),radial-gradient(circle at 40% 84%, rgba(115, 115, 115,0.03) 0%, rgba(115, 115, 115,0.03) 14%,transparent 14%, transparent 100%),linear-gradient(90deg, rgb(0,0,0),rgb(0,0,0))`,
-        }}
-      >
-        <Box sx={{ position: 'absolute', top: '20px', right: '20px' }}>
-          <Show when="signed-in">{isSignedIn && <UserButton />}</Show>
-          <Show when="signed-out">
+    <PublicPageShell
+      actions={(
+        <>
+          <Show when='signed-in'>{isSignedIn && <UserButton />}</Show>
+          <Show when='signed-out'>
             <SignInButton>
-              <Button variant="plain" sx={{ color: 'white', mr: 1 }}>
+              <Button variant='plain' color='neutral'>
                 Sign In
               </Button>
             </SignInButton>
             <SignUpButton>
-              <Button variant="plain" sx={{ color: 'white' }}>
+              <Button variant='solid' color='neutral'>
                 Sign Up
               </Button>
             </SignUpButton>
           </Show>
-        </Box>
-        <Typography level="h1" sx={{ color: 'white', textAlign: 'center', mb: 2 }}>
-          big-AGI
-        </Typography>
-        <Typography level="title-lg" sx={{ color: 'white', textAlign: 'center', maxWidth: '600px' }}>
-          Exploring the boundaries of AI, one conversation at a time.
-        </Typography>
-        <Show when="signed-in">
-          {isAuthCheckComplete &&
-            (isAuthorized ? (
-              <Button variant="solid" sx={{ mt: 2 }} onClick={() => router.push('/chat')}>
-                Start a Conversation
-              </Button>
-            ) : (
-              <Typography sx={{ color: 'white', textAlign: 'center', mt: 2 }}>
-                Sorry, you were not given permission to access the chat. Contact Bill for more details.
-              </Typography>
-            ))}
-        </Show>
-        <Box sx={{ position: 'absolute', bottom: '20px', right: '20px', display: 'flex', gap: '8px' }}>
-          <Button
-            variant="plain"
-            sx={{
-              color: 'rgba(255, 255, 255, 0.5)', // Subtle color
-              fontSize: '0.75rem', // Smaller text
-              textTransform: 'none', // No capitalization
-              p: '6px', // Padding
-              '&:hover': {
-                bgcolor: 'rgba(255, 255, 255, 0.1)', // Subtle hover effect
-              },
-            }}
-            onClick={() => router.push('/terms')}
-          >
-            Terms
-          </Button>
-          <Button
-            variant="plain"
-            sx={{
-              color: 'rgba(255, 255, 255, 0.5)', // Subtle color
-              fontSize: '0.75rem', // Smaller text
-              textTransform: 'none', // No capitalization
-              p: '6px', // Padding
-              '&:hover': {
-                bgcolor: 'rgba(255, 255, 255, 0.1)', // Subtle hover effect
-              },
-            }}
-            onClick={() => router.push('/privacy')}
-          >
-            Privacy
-          </Button>
+        </>
+      )}
+    >
+      <Box sx={{
+        display: 'grid',
+        gridTemplateColumns: { xs: '1fr', md: 'minmax(0, 1.15fr) minmax(320px, 0.85fr)' },
+        gap: { xs: 3, md: 4 },
+        alignItems: 'center',
+      }}>
+        <Card variant='plain' sx={{
+          p: { xs: 2.5, md: 4 },
+          borderRadius: 'xl',
+          boxShadow: 'lg',
+          bgcolor: 'background.surface',
+          overflow: 'hidden',
+          position: 'relative',
+        }}>
+          <Box sx={{
+            position: 'absolute',
+            inset: 0,
+            pointerEvents: 'none',
+            background: 'radial-gradient(circle at 85% 20%, rgb(var(--joy-palette-primary-mainChannel) / 0.12), transparent 18rem)',
+          }} />
+          <CardContent sx={{ position: 'relative', gap: 2.25 }}>
+            <Chip color='primary' variant='soft' size='sm' sx={{ alignSelf: 'flex-start' }}>
+              AI workspace for serious conversations
+            </Chip>
+            <Typography level='h1' sx={{
+              maxWidth: 720,
+              fontSize: { xs: '2.5rem', md: '4.5rem' },
+              lineHeight: 0.95,
+              letterSpacing: '-0.06em',
+            }}>
+              Big-AGI, refined for deep work.
+            </Typography>
+            <Typography level='title-lg' sx={{ maxWidth: 640, color: 'text.secondary' }}>
+              Explore the boundaries of AI in a fast, local-first interface that keeps the focus on the conversation.
+            </Typography>
+
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.25, pt: 1 }}>
+              <Show when='signed-in'>
+                {isAuthCheckComplete
+                  ? isAuthorized ? (
+                    <Button size='lg' variant='solid' color='neutral' onClick={() => router.push('/chat')}>
+                      Start a Conversation
+                    </Button>
+                  ) : (
+                    <Card variant='soft' color='warning' sx={{ maxWidth: 520 }}>
+                      <Typography level='body-sm'>
+                        Sorry, you were not given permission to access the chat. Contact Bill for more details.
+                      </Typography>
+                    </Card>
+                  )
+                  : (
+                    <Button size='lg' variant='solid' color='neutral' disabled>
+                      Checking Access
+                    </Button>
+                  )}
+              </Show>
+              <Show when='signed-out'>
+                <SignUpButton>
+                  <Button size='lg' variant='solid' color='neutral'>
+                    Create Account
+                  </Button>
+                </SignUpButton>
+                <SignInButton>
+                  <Button size='lg' variant='soft' color='neutral'>
+                    Sign In
+                  </Button>
+                </SignInButton>
+              </Show>
+            </Box>
+          </CardContent>
+        </Card>
+
+        <Box sx={{
+          display: 'grid',
+          gap: 1.5,
+        }}>
+          {valueCards.map((card, idx) => (
+            <Card key={card.title} variant={idx === 0 ? 'solid' : 'soft'} color={idx === 0 ? 'neutral' : undefined} invertedColors={idx === 0} sx={{
+              borderRadius: 'lg',
+              boxShadow: idx === 0 ? 'md' : undefined,
+            }}>
+              <CardContent>
+                <Typography level='title-md'>{card.title}</Typography>
+                <Typography level='body-sm'>{card.description}</Typography>
+              </CardContent>
+            </Card>
+          ))}
         </Box>
       </Box>
-    </CssVarsProvider>
+    </PublicPageShell>
   );
 }
