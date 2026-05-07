@@ -1,13 +1,19 @@
 import { aixChatGenerateContent_DMessage_FromConversation, AixChatGenerateContent_DMessageGuts } from '~/modules/aix/client/aix.client';
+import type { AixAPIChatGenerate_Request } from '~/modules/aix/server/api/aix.wiretypes';
 import { autoChatFollowUps } from '~/modules/aifn/auto-chat-follow-ups/autoChatFollowUps';
 import { autoConversationTitle } from '~/modules/aifn/autotitle/autoTitle';
+import { mcpToolsToAixTools, normalizeMcpToolResultForAix, type McpAixToolMapping } from '~/modules/mcp/mcp.aixTools';
+import { getMcpConfigForChat } from '~/modules/mcp/store-module-mcp';
 
 import { DConversationId, splitSystemMessageFromHistory } from '~/common/stores/chat/chat.conversation';
-import type { DLLMId } from '~/common/stores/llms/llms.types';
+import { createErrorContentFragment, create_FunctionCallResponse_ContentFragment, DMessageContentFragment, isToolInvocationPart } from '~/common/stores/chat/chat.fragments';
+import { findLLMOrThrow } from '~/common/stores/llms/store-llms';
+import { LLM_IF_OAI_Fn, type DLLMId } from '~/common/stores/llms/llms.types';
 import { AudioGenerator } from '~/common/util/audio/AudioGenerator';
 import { ConversationsManager } from '~/common/chat-overlay/ConversationsManager';
 import { DMessage, MESSAGE_FLAG_NOTIFY_COMPLETE, messageWasInterruptedAtStart } from '~/common/stores/chat/chat.message';
 import { getLabsHighPerformance } from '~/common/stores/store-ux-labs';
+import { apiAsyncNode } from '~/common/util/trpc.client';
 
 import { PersonaChatMessageSpeak } from './persona/PersonaChatMessageSpeak';
 import { getChatAutoAI, getChatThinkingPolicy, getIsNotificationEnabledForModel } from '../store-app-chat';
@@ -21,6 +27,15 @@ export const CHATGENERATE_RESPONSE_PLACEHOLDER = '...'; // 💫 ..., 🖊️ ...
 export interface PersonaProcessorInterface {
   handleMessage(accumulatedMessage: AixChatGenerateContent_DMessageGuts, messageComplete: boolean): void;
 }
+
+const MCP_MAX_TOOL_STEPS = 6;
+const MCP_MAX_TOOL_CALLS_PER_TURN = 12;
+
+type McpChatRuntime = {
+  config: NonNullable<ReturnType<typeof getMcpConfigForChat>>;
+  toolMapping: McpAixToolMapping;
+  tools: NonNullable<AixAPIChatGenerate_Request['tools']>;
+};
 
 
 /**
@@ -64,44 +79,113 @@ export async function runPersonaOnConversationHead(
   const abortController = new AbortController();
   cHandler.setAbortController(abortController, 'chat-persona');
 
+  // MCP tools are exposed only to models that advertise function-call support.
+  const mcpRuntime = await prepareMcpChatRuntime(assistantLlmId).catch(error => {
+    console.warn('[DEV] MCP tools unavailable:', error);
+    return null;
+  });
+
+  let fixedMcpFragments: AixChatGenerateContent_DMessageGuts['fragments'] = [];
+  let activeChatHistory = chatHistory;
+  let messageStatus!: Awaited<ReturnType<typeof aixChatGenerateContent_DMessage_FromConversation>>;
+  let lastDMessage: AixChatGenerateContent_DMessageGuts | null = null;
+  let totalToolCalls = 0;
+
+  const editAssistantMessage = (messageOverwrite: AixChatGenerateContent_DMessageGuts, messageComplete: boolean) => {
+    const combinedMessage = fixedMcpFragments.length
+      ? { ...messageOverwrite, fragments: [...fixedMcpFragments, ...messageOverwrite.fragments] }
+      : messageOverwrite;
+
+    // fragments and generator are already immutable (new refs per update) - no deep clone needed
+    const { fragments, ...rest } = combinedMessage;
+
+    // [Cosmetic Logic] if the content hasn't come yet, don't replace the fragments to still show the placeholder
+    const includeFragments = !!fragments?.length || messageComplete || !combinedMessage.pendingIncomplete;
+
+    // update the message
+    cHandler.messageEdit(assistantMessageId, { ...(includeFragments && { fragments }), ...rest }, messageComplete, false);
+
+    // if requested, speak the message
+    autoSpeaker?.handleMessage(combinedMessage, messageComplete);
+
+    return combinedMessage;
+  };
+
   // stream the assistant's messages directly to the state store
-  const messageStatus = await aixChatGenerateContent_DMessage_FromConversation(
-    assistantLlmId,
-    chatSystemInstruction,
-    chatHistory,
-    'conversation',
-    conversationId,
-    { abortSignal: abortController.signal, throttleParallelThreads: parallelViewCount },
-    (messageOverwrite: AixChatGenerateContent_DMessageGuts, messageComplete: boolean) => {
+  for (let step = 0; step <= MCP_MAX_TOOL_STEPS; step++) {
 
-      // Note: there was an abort check here, but it removed the last packet, which contained the cause and final text.
-      // if (abortController.signal.aborted)
-      //   console.warn('runPersonaOnConversationHead: Aborted', { conversationId, assistantLlmId, messageOverwrite });
+    messageStatus = await aixChatGenerateContent_DMessage_FromConversation(
+      assistantLlmId,
+      chatSystemInstruction,
+      activeChatHistory,
+      'conversation',
+      conversationId,
+      {
+        abortSignal: abortController.signal,
+        throttleParallelThreads: parallelViewCount,
+        ...(mcpRuntime && mcpRuntime.tools.length ? { tools: mcpRuntime.tools } : {}),
+      },
+      (messageOverwrite: AixChatGenerateContent_DMessageGuts, messageComplete: boolean) => {
 
-      // fragments and generator are already immutable (new refs per update) - no deep clone needed
-      const { fragments, ...rest } = messageOverwrite;
+        // Note: there was an abort check here, but it removed the last packet, which contained the cause and final text.
+        // if (abortController.signal.aborted)
+        //   console.warn('runPersonaOnConversationHead: Aborted', { conversationId, assistantLlmId, messageOverwrite });
 
-      // [Cosmetic Logic] if the content hasn't come yet, don't replace the fragments to still show the placeholder
-      const includeFragments = !!fragments?.length || messageComplete || !messageOverwrite.pendingIncomplete;
+        lastDMessage = editAssistantMessage(messageOverwrite, messageComplete);
 
-      // update the message
-      cHandler.messageEdit(assistantMessageId, { ...(includeFragments && { fragments }), ...rest }, messageComplete, false);
+        // if (messageComplete)
+        //   AudioGenerator.basicAstralChimes({ volume: 0.4 }, 0, 2, 250);
+      },
+    );
 
-      // if requested, speak the message
-      autoSpeaker?.handleMessage(messageOverwrite, messageComplete);
+    lastDMessage = fixedMcpFragments.length
+      ? { ...messageStatus.lastDMessage, fragments: [...fixedMcpFragments, ...messageStatus.lastDMessage.fragments] }
+      : messageStatus.lastDMessage;
 
-      // if (messageComplete)
-      //   AudioGenerator.basicAstralChimes({ volume: 0.4 }, 0, 2, 250);
-    },
-  );
+    if (!mcpRuntime || messageStatus.outcome === 'failed' || abortController.signal.aborted)
+      break;
+
+    const invocations = collectUnresolvedMcpInvocations(lastDMessage.fragments, mcpRuntime.toolMapping);
+    if (!invocations.length)
+      break;
+
+    if (step >= MCP_MAX_TOOL_STEPS || totalToolCalls + invocations.length > MCP_MAX_TOOL_CALLS_PER_TURN) {
+      fixedMcpFragments = [
+        ...lastDMessage.fragments,
+        createErrorContentFragment(`MCP tool limit reached. Stopped after ${totalToolCalls} tool calls.`),
+      ];
+      lastDMessage = { ...lastDMessage, fragments: fixedMcpFragments, pendingIncomplete: false };
+      cHandler.messageEdit(assistantMessageId, lastDMessage, true, false);
+      break;
+    }
+
+    const responseFragments: DMessageContentFragment[] = [];
+    for (const invocation of invocations) {
+      if (abortController.signal.aborted)
+        break;
+
+      totalToolCalls++;
+      responseFragments.push(await executeMcpInvocation(mcpRuntime, invocation));
+    }
+
+    fixedMcpFragments = [...lastDMessage.fragments, ...responseFragments];
+    lastDMessage = { ...lastDMessage, fragments: fixedMcpFragments, pendingIncomplete: false };
+    cHandler.messageEdit(assistantMessageId, lastDMessage, false, false);
+
+    activeChatHistory = [
+      ...chatHistory,
+      createAssistantMessageForMcpLoop(assistantMessageId, lastDMessage, chatSystemInstruction?.purposeId),
+    ];
+  }
+
+  const finalDMessage = lastDMessage || messageStatus.lastDMessage;
 
   // final message update (needed only in case of error)
-  const lastDMessage = messageStatus.lastDMessage;
   if (messageStatus.outcome === 'failed')
-    cHandler.messageEdit(assistantMessageId, lastDMessage, true, false);
+    cHandler.messageEdit(assistantMessageId, finalDMessage, true, false);
 
   // special case: if the last message was aborted and had no content, delete it
-  if (messageWasInterruptedAtStart(lastDMessage)) {
+  if (messageWasInterruptedAtStart(finalDMessage)) {
     cHandler.messagesDelete([assistantMessageId]);
     // NOTE: ok to exit here, as the abort was already done
     return false;
@@ -136,4 +220,111 @@ export async function runPersonaOnConversationHead(
 
   // return true if this succeeded
   return messageStatus.outcome === 'completed';
+}
+
+async function prepareMcpChatRuntime(llmId: DLLMId): Promise<McpChatRuntime | null> {
+  const config = getMcpConfigForChat();
+  if (!config)
+    return null;
+
+  const llm = findLLMOrThrow(llmId);
+  if (!llm.interfaces.includes(LLM_IF_OAI_Fn))
+    return null;
+
+  const tools = await apiAsyncNode.mcp.listTools.mutate({ config });
+  if (!tools.length)
+    return null;
+
+  const { aixTools, toolMapping } = mcpToolsToAixTools(tools);
+  return { config, toolMapping, tools: aixTools };
+}
+
+function collectUnresolvedMcpInvocations(fragments: AixChatGenerateContent_DMessageGuts['fragments'], toolMapping: McpAixToolMapping) {
+  const responseIds = new Set(fragments
+    .filter((fragment): fragment is DMessageContentFragment => fragment.ft === 'content')
+    .map(fragment => fragment.part)
+    .filter(part => part.pt === 'tool_response')
+    .map(part => part.id));
+
+  const invocations = fragments
+    .filter((fragment): fragment is DMessageContentFragment => fragment.ft === 'content')
+    .map(fragment => fragment.part)
+    .filter(isToolInvocationPart)
+    .flatMap(part => {
+      if (part.invocation.type !== 'function_call')
+        return [];
+      if (!toolMapping[part.invocation.name] || responseIds.has(part.id))
+        return [];
+      return [{
+        id: part.id,
+        functionName: part.invocation.name,
+        args: part.invocation.args,
+      }];
+    });
+
+  return invocations;
+}
+
+async function executeMcpInvocation(
+  runtime: McpChatRuntime,
+  invocation: ReturnType<typeof collectUnresolvedMcpInvocations>[number],
+): Promise<DMessageContentFragment> {
+  const target = runtime.toolMapping[invocation.functionName];
+  if (!target)
+    return create_FunctionCallResponse_ContentFragment(invocation.id, true, invocation.functionName, JSON.stringify({ isError: true, content: 'Unknown MCP tool.' }), 'server');
+
+  try {
+    const args = parseFunctionCallArgs(invocation.args);
+    const result = await apiAsyncNode.mcp.callTool.mutate({
+      config: runtime.config,
+      serverId: target.serverId,
+      toolName: target.toolName,
+      arguments: args,
+    });
+    return create_FunctionCallResponse_ContentFragment(
+      invocation.id,
+      result.isError,
+      invocation.functionName,
+      normalizeMcpToolResultForAix(result),
+      'server',
+    );
+  } catch (error: any) {
+    return create_FunctionCallResponse_ContentFragment(
+      invocation.id,
+      true,
+      invocation.functionName,
+      JSON.stringify({
+        isError: true,
+        content: error?.message || 'MCP tool call failed.',
+      }),
+      'server',
+    );
+  }
+}
+
+function parseFunctionCallArgs(args: string): Record<string, unknown> {
+  if (!args)
+    return {};
+  const parsed = JSON.parse(args);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+    return {};
+  return parsed;
+}
+
+function createAssistantMessageForMcpLoop(
+  assistantMessageId: DMessage['id'],
+  message: AixChatGenerateContent_DMessageGuts,
+  purposeId: DMessage['purposeId'],
+): DMessage {
+  const now = Date.now();
+  return {
+    id: assistantMessageId,
+    role: 'assistant',
+    fragments: message.fragments,
+    generator: message.generator,
+    ...(purposeId && { purposeId }),
+    tokenCount: 0,
+    created: now,
+    updated: now,
+  };
 }

@@ -204,6 +204,10 @@ interface AixClientOptions {
   abortSignal: AbortSignal | 'NON_ABORTABLE'; // 'NON_ABORTABLE' is a special case for non-abortable operations
   throttleParallelThreads?: number; // 0: disable, 1: default throttle (12Hz), 2+ reduce frequency with the square root
 
+  // Optional custom tools for orchestration layers such as MCP.
+  tools?: AixAPIChatGenerate_Request['tools'];
+  toolsPolicy?: AixAPIChatGenerate_Request['toolsPolicy'];
+
   // [Reattach] Internal hook - set by `aixReattachContent_DMessage_orThrow`. When present, seeds the LL
   // with this generator; the upstreamHandle on it triggers the LL reattach branch (Gemini Deep Research GET-poll).
   reattachGenerator?: Readonly<DMessageGenerator> & Required<Pick<DMessageGenerator, 'upstreamHandle'>>;
@@ -258,6 +262,8 @@ export async function aixChatGenerateContent_DMessage_FromConversation(
     const aixChatContentGenerateRequest: AixAPIChatGenerate_Request = {
       systemMessage: await aixCGR_SystemMessage_FromDMessageOrThrow(chatSystemInstruction),
       chatSequence: await aixCGR_ChatSequence_FromDMessagesOrThrow(chatHistoryWithoutSystemMessages),
+      ...(clientOptions.tools?.length ? { tools: clientOptions.tools } : {}),
+      ...(clientOptions.toolsPolicy ? { toolsPolicy: clientOptions.toolsPolicy } : {}),
     };
 
     // [Anthropic Container] Session resolution: walk history backwards to find the most recent

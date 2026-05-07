@@ -9,6 +9,7 @@
 import type { FetchCreateContextFnOptions } from '@trpc/server/adapters/fetch';
 import * as z from 'zod/v4';
 import { initTRPC } from '@trpc/server';
+import { currentUser } from '@clerk/nextjs/server';
 import { transformer } from './trpc.transformer';
 import { TRPCFetcherError } from './trpc.router.fetchers';
 
@@ -29,11 +30,24 @@ export type ChatGenerateContentContext = Awaited<ReturnType<typeof createTRPCFet
 export const createTRPCFetchContext = async ({ req }: FetchCreateContextFnOptions) => {
   // const user = { name: req.headers.get('username') ?? 'anonymous' };
   // return { req, resHeaders };
+  let clerkUserEmail: string | null | undefined;
+
   return {
     // only used by Backend Analytics
     hostName: req.headers?.get('host') ?? 'localhost',
     // enables cancelling upstream requests when the downstream request is aborted
     reqSignal: req.signal,
+    // lazy to avoid a Clerk API call unless a procedure needs authenticated user details
+    getUserEmail: async () => {
+      if (clerkUserEmail !== undefined)
+        return clerkUserEmail;
+
+      const user = await currentUser();
+      clerkUserEmail = user?.primaryEmailAddress?.emailAddress
+        ?? user?.emailAddresses?.[0]?.emailAddress
+        ?? null;
+      return clerkUserEmail;
+    },
   };
 };
 

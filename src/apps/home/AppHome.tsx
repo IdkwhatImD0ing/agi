@@ -5,6 +5,7 @@ import { doc, getDoc } from 'firebase/firestore';
 import { useRouter } from 'next/router';
 
 import { firestore } from '../../firebase';
+import { isMasterAdminEmail, normalizeAdminEmail } from '~/common/admin/admin.config';
 import { PublicPageShell } from './PublicPageShell';
 
 
@@ -33,13 +34,12 @@ export default function Home() {
   useEffect(() => {
     const checkAuthorization = async () => {
       if (user) {
-        const userEmail = user.primaryEmailAddress?.emailAddress || '';
+        const userEmail = normalizeAdminEmail(user.primaryEmailAddress?.emailAddress || '');
+        const isMasterAdmin = isMasterAdminEmail(userEmail);
         const userDocRef = doc(firestore, 'users', userEmail);
         try {
           const userDoc = await getDoc(userDocRef);
-          if (userDoc.exists()) {
-            setIsAuthorized(userDoc.data().authorized);
-          }
+          setIsAuthorized(isMasterAdmin || (userDoc.exists() && userDoc.data().authorized));
         } catch (error) {
           console.error('Error fetching user data:', error);
         }

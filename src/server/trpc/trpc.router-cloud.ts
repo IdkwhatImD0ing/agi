@@ -1,6 +1,8 @@
 import { createTRPCRouter } from './trpc.server';
 
+import { adminRouter } from '~/server/admin/admin.router';
 import { browseRouter } from '~/modules/browse/browse.router';
+import { mcpRouter } from '~/modules/mcp/server/mcp.router';
 import { tradeRouter } from '~/modules/trade/server/trade.router';
 
 /**
@@ -8,7 +10,9 @@ import { tradeRouter } from '~/modules/trade/server/trade.router';
  * NOTE: at the time of writing, the location is aws|us-east-1
  */
 export const appRouterCloud = createTRPCRouter({
+  admin: adminRouter,
   browse: browseRouter,
+  mcp: mcpRouter,
   trade: tradeRouter,
 });
 

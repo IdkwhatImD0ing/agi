@@ -24,6 +24,7 @@ import '~/common/styles/agi.effects.css';
 import '~/common/styles/app.styles.css';
 
 import { ErrorBoundary } from '~/common/components/ErrorBoundary';
+import { isMasterAdminEmail, normalizeAdminEmail } from '~/common/admin/admin.config';
 import { hasGoogleAnalytics, OptionalGoogleAnalytics } from '~/common/components/3rdparty/GoogleAnalytics';
 import { hasPostHogAnalytics, OptionalPostHogAnalytics } from '~/common/components/3rdparty/PostHogAnalytics';
 import { OverlaysInsert } from '~/common/layout/overlays/OverlaysInsert';
@@ -84,19 +85,21 @@ const Redirect = () => {
       return;
     }
 
-    const userEmail = user.primaryEmailAddress.emailAddress;
+    const userEmail = normalizeAdminEmail(user.primaryEmailAddress.emailAddress);
+    const isMasterAdmin = isMasterAdminEmail(userEmail);
     const userCollectionRef = doc(firestore, 'users', userEmail);
 
     try {
       const docSnap = await getDoc(userCollectionRef);
 
       if (!docSnap.exists()) {
-        await setDoc(userCollectionRef, { authorized: false });
-        await router.push('/');
+        await setDoc(userCollectionRef, { email: userEmail, authorized: isMasterAdmin });
+        if (!isMasterAdmin)
+          await router.push('/');
         return;
       }
 
-      if (!docSnap.data().authorized) {
+      if (!isMasterAdmin && !docSnap.data().authorized) {
         await router.push('/');
       }
     } catch (error) {

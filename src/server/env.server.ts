@@ -120,6 +120,9 @@ export const env = createEnv({
     HTTP_BASIC_AUTH_USERNAME: z.string().optional(),
     HTTP_BASIC_AUTH_PASSWORD: z.string().optional(),
 
+    // Backend Firebase Admin SDK, used for server-side allowlist administration
+    FIREBASE_SERVICE_ACCOUNT_JSON: z.string().optional(),
+
     // AIX: Strict parsing mode - if omitted: strict in dev (throws on unknown API values), tolerant in prod (warns)
     // Set to 'true' to force strict mode in production (useful for debugging API drift)
     AIX_STRICT_PARSING: z.enum(['true']).optional(),

@@ -3,6 +3,7 @@ import * as React from 'react';
 import { Accordion, AccordionDetails, AccordionGroup, AccordionSummary, accordionSummaryClasses, Avatar, Box, Button, ListItemContent, styled, Tab, TabList, TabPanel, Tabs, Typography } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
+import ExtensionIcon from '@mui/icons-material/Extension';
 import KeyboardCommandKeyOutlinedIcon from '@mui/icons-material/KeyboardCommandKeyOutlined';
 import LanguageRoundedIcon from '@mui/icons-material/LanguageRounded';
 import MicIcon from '@mui/icons-material/Mic';
@@ -13,6 +14,7 @@ import TerminalOutlinedIcon from '@mui/icons-material/TerminalOutlined';
 import { BrowseSettings } from '~/modules/browse/BrowseSettings';
 import { DallESettings } from '~/modules/t2i/dalle/DallESettings';
 import { GoogleSearchSettings } from '~/modules/google/GoogleSearchSettings';
+import { McpSettings } from '~/modules/mcp/McpSettings';
 import { T2ISettings } from '~/modules/t2i/T2ISettings';
 
 import type { PreferencesTabId } from '~/common/layout/optima/store-layout-optima';
@@ -331,6 +333,9 @@ export function SettingsModal(props: {
             </Box>
           </Box>
           <Topics>
+            <Topic icon={<ExtensionIcon />} title='MCP Tools' startCollapsed>
+              <McpSettings />
+            </Topic>
             <Topic icon={<LanguageRoundedIcon />} title='Load Web Pages (with images)' startCollapsed>
               <BrowseSettings />
             </Topic>
